@@ -4,7 +4,7 @@ Release:        1%{?dist}
 Summary:        Read-only hardware monitor for Intel/AMD servers (rdmsr-based)
 License:        GPL-2.0-only
 URL:            https://github.com/SkyWalkerAMD/msr-sck
-Source0:        Source0: https://github.com/SkyWalkerAMD/msr-sck/archive/refs/tags/%{version}.tar.gz#/%{name}-%{version}.tar.gz
+Source0:        https://github.com/SkyWalkerAMD/msr-sck/archive/refs/tags/%{version}.tar.gz#/%{name}-%{version}.tar.gz
 BuildRequires:  gcc
 Requires:       dmidecode
 Requires:       kmod

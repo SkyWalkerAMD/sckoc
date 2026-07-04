@@ -45,8 +45,7 @@ sudo apt install ./msr-sck_1.0.0-1_amd64.deb        # Ubuntu/Debian
 Rocky / CentOS Stream / RHEL(COPR):
 
 ```bash
-sudo dnf copr enable skywalkeramd/msr-sck
-sudo dnf install msr-sck
+sudo dnf copr enable skywalkeramd/msr-sck && sudo dnf install msr-sck
 ```
 
 Ubuntu / Debian(GitHub Pages apt 仓库):

@@ -29,12 +29,12 @@ jobs:
       - name: build rpm
         run: |
           dnf -y install rpm-build gcc tar gzip
-          mkdir -p /root/rpmbuild/SOURCES /root/rpmbuild/SPECS
+          mkdir -p "$HOME/rpmbuild/SOURCES"
           V=$(sed -n 's/^Version:[[:space:]]*//p' packaging/msr-sck.spec)
           mkdir -p "/tmp/msr-sck-$V" && cp -r . "/tmp/msr-sck-$V/" && rm -rf "/tmp/msr-sck-$V/.git"
-          tar -C /tmp -czf "/root/rpmbuild/SOURCES/msr-sck-$V.tar.gz" "msr-sck-$V"
+          tar -C /tmp -czf "$HOME/rpmbuild/SOURCES/msr-sck-$V.tar.gz" "msr-sck-$V"
           rpmbuild -ba packaging/msr-sck.spec
-          cp /root/rpmbuild/RPMS/x86_64/*.rpm .
+          cp "$HOME"/rpmbuild/RPMS/x86_64/*.rpm .
       - uses: actions/upload-artifact@v4
         with: { name: rpm, path: "*.rpm" }
       - name: attach to release

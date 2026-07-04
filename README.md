@@ -28,7 +28,7 @@ Intel/AMD 服务器与工作站的只读硬件监控工具,基于 [intel/msr-too
 **方式一:一键脚本**(任何发行版,克隆仓库或单独下载 install.sh 均可)
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/GITHUB_USER/msr-sck/main/install.sh | sudo bash
+curl -fsSL https://raw.githubusercontent.com/SkyWalkerAMD/msr-sck/main/install.sh | sudo bash
 ```
 
 自包含:自动装依赖(gcc、dmidecode)、编译组件、部署命令与 bash 补全、设置 msr 模块开机加载。重复运行即升级,自动清理旧版本。

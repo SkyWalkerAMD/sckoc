@@ -60,7 +60,7 @@ sudo apt update && sudo apt install msr-sck
 ## 使用
 
 ```bash
-sudo msr-sck                    # 完整监控概览(默认 mon)
+sudo msr-sck                    # 完整监控概览
 sudo msr-sck vcore              # 逐核 Vcore(验证每核调压)
 sudo msr-sck dump 0x198 47:32   # 逐 socket 读任意 MSR 位段
 msr-sck -V                      # 版本

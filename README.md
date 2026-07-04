@@ -33,18 +33,27 @@ curl -fsSL https://raw.githubusercontent.com/SkyWalkerAMD/msr-sck/main/install.s
 
 自包含:自动装依赖(gcc、dmidecode)、编译组件、部署命令与 bash 补全、设置 msr 模块开机加载。重复运行即升级,自动清理旧版本。
 
-**方式二:软件包**(从 [Releases](https://github.com/GITHUB_USER/msr-sck/releases) 下载)
+**方式二:软件包**(从 [Releases](https://github.com/SkyWalkerAMD/msr-sck/releases) 下载)
 
 ```bash
 sudo dnf install ./msr-sck-1.0.0-1.x86_64.rpm      # Rocky/RHEL/Fedora
 sudo apt install ./msr-sck_1.0.0-1_amd64.deb        # Ubuntu/Debian
 ```
 
-**方式三:COPR 仓库**(RHEL 系,真正的 `dnf install msr-sck`)
+**方式三:软件仓库**(添加一次,之后 `dnf/apt install msr-sck` 并自动获得更新)
+
+Rocky / CentOS Stream / RHEL(COPR):
 
 ```bash
-sudo dnf copr enable GITHUB_USER/msr-sck
+sudo dnf copr enable skywalkeramd/msr-sck
 sudo dnf install msr-sck
+```
+
+Ubuntu / Debian(GitHub Pages apt 仓库):
+
+```bash
+echo "deb [trusted=yes] https://skywalkeramd.github.io/msr-sck/apt stable main" | sudo tee /etc/apt/sources.list.d/msr-sck.list
+sudo apt update && sudo apt install msr-sck
 ```
 
 自行构建软件包:`rpmbuild -ba packaging/msr-sck.spec`(需将源码 tar 放入 SOURCES)或 `bash packaging/build-deb.sh`。

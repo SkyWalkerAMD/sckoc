@@ -1,10 +1,10 @@
 Name:           msr-sck
-Version:        1.0.0
+Version:        1.0.1
 Release:        1%{?dist}
 Summary:        Read-only hardware monitor for Intel/AMD servers (rdmsr-based)
 License:        GPL-2.0-only
-URL:            https://github.com/SkyWalkerAMD/msr-sck
-Source0:        https://github.com/SkyWalkerAMD/msr-sck/archive/refs/tags/%{version}.tar.gz#/%{name}-%{version}.tar.gz
+URL:            https://github.com/GITHUB_USER/msr-sck
+Source0:        %{name}-%{version}.tar.gz
 BuildRequires:  gcc
 Requires:       dmidecode
 Requires:       kmod
@@ -42,5 +42,9 @@ modprobe msr 2>/dev/null || :
 %{_prefix}/lib/modules-load.d/msr-sck.conf
 
 %changelog
-* Sat Jul 04 2026 SkyWalkerAMD <scka7t@gmail.com> - 1.0.0-1
+* Sun Jul 05 2026 SkyWalkerAMD <you@example.com> - 1.0.1-1
+- Fix per-core power overestimation on high-core-count AMD (TSC-based window)
+- Add msr-sck uninstall subcommand, -V works without msr module
+
+* Sat Jul 04 2026 SkyWalkerAMD <you@example.com> - 1.0.0-1
 - Initial release

@@ -1,5 +1,5 @@
 _msr_sck(){
   local cur=${COMP_WORDS[COMP_CWORD]}
-  [ "$COMP_CWORD" -eq 1 ] && COMPREPLY=($(compgen -W "mon dump vcore -V version" -- "$cur"))
+  [ "$COMP_CWORD" -eq 1 ] && COMPREPLY=($(compgen -W "mon dump vcore uninstall -V version" -- "$cur"))
 }
 complete -F _msr_sck msr-sck

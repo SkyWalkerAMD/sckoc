@@ -1,5 +1,5 @@
 Name:           msr-sck
-Version:        1.0.2
+Version:        1.0.3
 Release:        1%{?dist}
 Summary:        Read-only hardware monitor for Intel/AMD servers (rdmsr-based)
 License:        GPL-2.0-only
@@ -53,6 +53,11 @@ if [ "$1" = 0 ]; then rm -f /etc/modules-load.d/msr-sck-amd.conf; fi
 %{_prefix}/lib/modules-load.d/msr-sck.conf
 
 %changelog
+* Mon Jul 06 2026 SkyWalkerAMD <you@example.com> - 1.0.3-1
+- uninstall: remove installer-provisioned DKMS amd_hsmp (marker-based; user-installed kept with hint)
+- uninstall: clean all modules-load configs incl. amd/sensors; never hot-unload modules
+- standalone uninstall.sh: same fixes
+
 * Mon Jul 06 2026 SkyWalkerAMD <you@example.com> - 1.0.2-1
 - AMD: Vcore readout via P-state VID decode (fam 1Ah verified on TR PRO 9995WX; fam 17h SVI2)
 - AMD: per-CCD temperature column in per-core view (k10temp + L3 topology mapping)

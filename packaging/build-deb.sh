@@ -1,7 +1,7 @@
 #!/bin/bash
 # build msr-sck .deb — run from repo root: bash packaging/build-deb.sh
 set -e
-V=1.0.2; R=1; A=$(dpkg --print-architecture)
+V=1.0.3; R=1; A=$(dpkg --print-architecture)
 D=$(mktemp -d)
 gcc -Wall -O2 -D_GNU_SOURCE -D_FILE_OFFSET_BITS=64 -I. rdmsr.c -o "$D/rdmsr"
 gcc -Wall -O2 hsmp-msg.c -o "$D/hsmp-msg"

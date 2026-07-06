@@ -1,6 +1,6 @@
 #!/bin/bash
 # msr-sck: Intel/AMD read-only hardware monitor (rdmsr wrapper, no writes)
-MSRVER=1.0.0
+MSRVER=1.0.1
 set -e
 LIBEXEC=/usr/libexec/msr-sck
 RDMSR="${RDMSR:-$( [ -x "$LIBEXEC/rdmsr" ] && echo "$LIBEXEC/rdmsr" || command -v rdmsr || echo rdmsr )}"
@@ -8,7 +8,35 @@ INT="${INT:-1}"
 rf(){ "$RDMSR" -p "$1" -u "$2" 2>/dev/null || echo 0; }
 bits(){ echo $(( ($1 >> $2) & ((1 << $3) - 1) )); }
 
-[ -e /dev/cpu/0/msr ] || { echo "先: sudo modprobe msr"; exit 1; }
+case "${1:-}" in
+  -V|version) echo "msr-sck $MSRVER"; exit 0 ;;
+  uninstall)
+    [ "$(id -u)" = 0 ] || { echo "run as root: sudo msr-sck uninstall"; exit 1; }
+    echo "This will completely remove msr-sck (package, files, completion, module autoload, repo configs)."
+    if [ "${2:-}" != "-y" ]; then
+      printf "Continue? [y/N] "; read -r a
+      case "$a" in y|Y) ;; *) echo "aborted"; exit 1 ;; esac
+    fi
+    if command -v rpm >/dev/null && rpm -q msr-sck >/dev/null 2>&1; then
+      { command -v dnf >/dev/null && dnf -y remove msr-sck; } || { command -v yum >/dev/null && yum -y remove msr-sck; } || rpm -e msr-sck
+    fi
+    if command -v dpkg >/dev/null && dpkg -s msr-sck >/dev/null 2>&1; then
+      { command -v apt-get >/dev/null && apt-get -y remove msr-sck; } || dpkg -r msr-sck
+    fi
+    rm -f /usr/local/bin/msr-sck /usr/local/bin/rdmsr /usr/local/bin/hsmp-msg \
+          /usr/local/bin/msr /usr/local/bin/msr-w890e /usr/local/bin/msr-tr /usr/local/bin/hsmp-fclk \
+          /etc/bash_completion.d/msr-sck \
+          /etc/modules-load.d/msr.conf /etc/modules-load.d/msr-sck.conf /usr/lib/modules-load.d/msr-sck.conf \
+          /etc/apt/sources.list.d/msr-sck.list
+    modprobe -r msr 2>/dev/null || true
+    if command -v dnf >/dev/null && dnf copr list 2>/dev/null | grep -q msr-sck; then
+      dnf -y copr remove skywalkeramd/msr-sck 2>/dev/null || dnf -y copr disable skywalkeramd/msr-sck 2>/dev/null || true
+    fi
+    echo "msr-sck fully removed. (deps gcc/dmidecode kept)"
+    exit 0 ;;
+esac
+
+[ -e /dev/cpu/0/msr ] || { echo "msr module not loaded, run: sudo modprobe msr"; exit 1; }
 CPUROOT="${CPUROOT:-/sys/devices/system/cpu}"
 VEN="${MSRVEN:-$(awk '/vendor_id/{print $3;exit}' /proc/cpuinfo)}"
 FAM="${MSRFAM:-$(awk '/cpu family/{print $4;exit}' /proc/cpuinfo)}"
@@ -230,7 +258,7 @@ percore(){
       base=$(( $(amd_p0 "$c") / 100 ))
       local e2 dE; e2=$(bits "$(rf "$c" 0xC001029A)" 0 32)
       dE=$(( e2>=E1[$c] ? e2-E1[$c] : e2-E1[$c]+4294967296 ))
-      extra="  $(printf '%6s' "$(wt "$dE/2^$eu/$INT")") W  C0 $(printf '%3d' "$c0m")%"
+      extra="  $(printf '%6s' "$(wt "($dE) * ($base) * 100000000 / (2^$eu * ($dt))")") W  C0 $(printf '%3d' "$c0m")%"
     fi
     printf "  core%-3d %5d MHz%s\n" "$c" $(( base * 100 * bm / 1000 )) "$extra"
   done
@@ -263,5 +291,5 @@ case "${1:-mon}" in
       printf "  core%-3d %s V\n" "$c" "$(wt4 "$(bits "$(rf "$c" 0x198)" 32 16)/8192")"
     done ;;
   -V|version) echo "msr-sck $MSRVER"; exit 0 ;;
-  *) echo "Usage: msr-sck [mon|vcore] | dump <reg> [hi:lo] | -V | INT=<sec> msr-sck"; exit 1 ;;
+  *) echo "Usage: msr-sck [mon|vcore] | dump <reg> [hi:lo] | uninstall [-y] | -V | INT=<sec> msr-sck"; exit 1 ;;
 esac

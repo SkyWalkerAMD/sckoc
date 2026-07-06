@@ -2,7 +2,7 @@
 
 Intel/AMD 服务器与工作站的只读硬件监控工具,基于 [intel/msr-tools](https://github.com/intel/msr-tools) 的 `rdmsr` 派生。纯读取设计,兼容 Secure Boot / kernel lockdown (integrity) 环境。
 
-**当前版本: 1.0.0**
+**当前版本: 1.0.1**
 
 ## 支持平台
 
@@ -14,12 +14,13 @@ Intel/AMD 服务器与工作站的只读硬件监控工具,基于 [intel/msr-too
 **Platform 概览**:Secure Boot 状态、kernel lockdown 档位、OC Lock(Intel `0x194`)、SMT 开关、NUMA 节点数、SMU 固件版本(AMD)
 
 **每 Socket**:
+
 - Vcore、最热核心温度(TjMax 对照)、包级 PC2/PC6 驻留率、节流标志(THROTTLING / PROCHOT)
 - Core 当前/基准频率,Mesh 与 IOD-S/IOD-N 多域 uncore 频率(TPMI sysfs,含 Min/Max)
 - DRAM 频率与电压(SMBIOS)、DRAM 功耗(Intel RAPL)、DDR 带宽利用率(AMD HSMP)
 - Pkg 功耗(RAPL)、PL1/PL2 功率墙及使能/锁定(Intel)、PPT 功率墙(AMD)、FCLK/MCLK、Fmax/Fmin、CCLK Limit、C0%(AMD)
 
-**每核心**:有效频率(APERF/MPERF)、温度、Vcore、C0/C6 驻留率(Intel)、核心功耗(AMD);SMT 开启时自动按物理核聚合去重
+**每核心**:有效频率(APERF/MPERF)、温度、Vcore、C0/C6 驻留率(Intel)、核心功耗(AMD)。SMT 开启时自动按物理核聚合去重
 
 字段读取失败时显示 N/A 或自动隐藏,不输出伪造数值。
 
@@ -36,8 +37,8 @@ curl -fsSL https://raw.githubusercontent.com/SkyWalkerAMD/msr-sck/main/install.s
 **方式二:软件包**(从 [Releases](https://github.com/SkyWalkerAMD/msr-sck/releases) 下载)
 
 ```bash
-sudo dnf install ./msr-sck-1.0.0-1.x86_64.rpm      # Rocky/RHEL/Fedora
-sudo apt install ./msr-sck_1.0.0-1_amd64.deb        # Ubuntu/Debian
+sudo dnf install ./msr-sck-1.0.1-1.x86_64.rpm      # Rocky/RHEL/Fedora
+sudo apt install ./msr-sck_1.0.1-1_amd64.deb        # Ubuntu/Debian
 ```
 
 **方式三:软件仓库**(添加一次,之后 `dnf/apt install msr-sck` 并自动获得更新)
@@ -45,7 +46,8 @@ sudo apt install ./msr-sck_1.0.0-1_amd64.deb        # Ubuntu/Debian
 Rocky / CentOS Stream / RHEL(COPR):
 
 ```bash
-sudo dnf copr enable skywalkeramd/msr-sck && sudo dnf install msr-sck
+sudo dnf copr enable skywalkeramd/msr-sck
+sudo dnf install msr-sck
 ```
 
 Ubuntu / Debian(GitHub Pages apt 仓库):
@@ -60,7 +62,7 @@ sudo apt update && sudo apt install msr-sck
 ## 使用
 
 ```bash
-sudo msr-sck                    # 完整监控概览
+sudo msr-sck                    # 完整监控概览(默认 mon)
 sudo msr-sck vcore              # 逐核 Vcore(验证每核调压)
 sudo msr-sck dump 0x198 47:32   # 逐 socket 读任意 MSR 位段
 msr-sck -V                      # 版本
@@ -70,9 +72,21 @@ sudo watch -n 3 msr-sck         # 持续刷新
 
 支持 Tab 补全(命令名与子命令)。
 
+## 卸载
+
+```bash
+sudo msr-sck uninstall          # 交互确认,加 -y 跳过
+```
+
+自动识别安装方式(脚本 / rpm / deb)并完整清除,包括历史版本文件、bash 补全、模块自动加载配置和软件源配置。默认保留 gcc/dmidecode 等系统共享包。工具损坏无法执行时的兜底:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/SkyWalkerAMD/msr-sck/main/uninstall.sh | sudo bash
+```
+
 ## 依赖与权限
 
-需要 root 与 `msr` 内核模块(安装器已处理)。Mesh/IOD 频率需要 `intel-uncore-frequency(-tpmi)` 驱动(内核 5.6+/6.5+,RHEL 9 系已回移);AMD FCLK/PPT 等需要内核 `amd_hsmp` 驱动(5.18+)且 BIOS 开启 HSMP。全部功能在 Secure Boot + lockdown=integrity 下可用。
+需要 root 与 `msr` 内核模块(安装器已处理)。Mesh/IOD 频率需要 `intel-uncore-frequency(-tpmi)` 驱动(内核 5.6+/6.5+,RHEL 9 系已回移)。AMD FCLK/PPT 等需要内核 `amd_hsmp` 驱动(5.18+)且 BIOS 开启 HSMP。全部功能在 Secure Boot + lockdown=integrity 下可用。
 
 ## License
 

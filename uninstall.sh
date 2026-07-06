@@ -1,0 +1,51 @@
+#!/bin/bash
+# uninstall.sh: remove msr-sck completely (script-, rpm- or deb-installed)
+# usage: sudo bash uninstall.sh [--purge-deps]
+set -e
+[ "$(id -u)" = 0 ] || { echo "run as root / sudo"; exit 1; }
+
+PURGE=0; [ "$1" = "--purge-deps" ] && PURGE=1
+
+# 1) package-manager installs
+if command -v rpm >/dev/null && rpm -q msr-sck >/dev/null 2>&1; then
+  echo "== removing rpm package =="
+  { command -v dnf >/dev/null && dnf -y remove msr-sck; } || { command -v yum >/dev/null && yum -y remove msr-sck; } || rpm -e msr-sck
+fi
+if command -v dpkg >/dev/null && dpkg -s msr-sck >/dev/null 2>&1; then
+  echo "== removing deb package =="
+  { command -v apt-get >/dev/null && apt-get -y remove msr-sck; } || dpkg -r msr-sck
+fi
+
+# 2) script installs + legacy names
+echo "== removing files =="
+rm -f /usr/local/bin/msr-sck /usr/local/bin/rdmsr /usr/local/bin/hsmp-msg \
+      /usr/local/bin/msr /usr/local/bin/msr-w890e /usr/local/bin/msr-tr /usr/local/bin/hsmp-fclk \
+      /etc/bash_completion.d/msr-sck
+
+# 3) module autoload config + unload (safe if other tools use msr: they can modprobe again)
+rm -f /etc/modules-load.d/msr.conf /etc/modules-load.d/msr-sck.conf /usr/lib/modules-load.d/msr-sck.conf
+modprobe -r msr 2>/dev/null || true
+
+# 4) repo configs we may have suggested
+rm -f /etc/apt/sources.list.d/msr-sck.list
+if command -v dnf >/dev/null && dnf copr list 2>/dev/null | grep -q msr-sck; then
+  dnf -y copr remove skywalkeramd/msr-sck 2>/dev/null || dnf -y copr disable skywalkeramd/msr-sck 2>/dev/null || true
+fi
+
+# 5) optional dependency purge (dangerous: shared system packages)
+if [ "$PURGE" = 1 ]; then
+  echo "== WARNING: removing gcc/dmidecode - other software may depend on them =="
+  { command -v dnf >/dev/null && dnf -y remove dmidecode gcc; } || \
+  { command -v yum >/dev/null && yum -y remove dmidecode gcc; } || \
+  { command -v apt-get >/dev/null && apt-get -y remove dmidecode gcc; } || true
+fi
+
+# 6) verify
+LEFT=""
+for f in /usr/local/bin/msr-sck /usr/bin/msr-sck /usr/local/bin/rdmsr /usr/libexec/msr-sck; do
+  [ -e "$f" ] && LEFT="$LEFT $f"
+done
+if [ -n "$LEFT" ]; then echo "== WARNING: leftovers:$LEFT =="; exit 1; fi
+echo "== msr-sck fully removed =="
+[ "$PURGE" = 0 ] && echo "(deps gcc/dmidecode kept; rerun with --purge-deps to remove them too)"
+exit 0

@@ -15,7 +15,7 @@ Intel/AMD 服务器与工作站的只读硬件监控工具,基于 [intel/msr-too
 
 **每 Socket**:
 - Vcore、最热核心温度(TjMax 对照)、包级 PC2/PC6 驻留率、节流标志(THROTTLING / PROCHOT)
-- Core 当前/基准频率;Mesh 与 IOD-S/IOD-N 多域 uncore 频率(TPMI sysfs,含 Min/Max)
+- Core 当前/基准频率,Mesh 与 IOD-S/IOD-N 多域 uncore 频率(TPMI sysfs,含 Min/Max)
 - DRAM 频率与电压(SMBIOS)、DRAM 功耗(Intel RAPL)、DDR 带宽利用率(AMD HSMP)
 - Pkg 功耗(RAPL)、PL1/PL2 功率墙及使能/锁定(Intel)、PPT 功率墙(AMD)、FCLK/MCLK、Fmax/Fmin、CCLK Limit、C0%(AMD)
 

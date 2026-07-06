@@ -23,8 +23,21 @@ rm -f /usr/local/bin/msr-sck /usr/local/bin/rdmsr /usr/local/bin/hsmp-msg \
       /etc/bash_completion.d/msr-sck
 
 # 3) module autoload config + unload (safe if other tools use msr: they can modprobe again)
-rm -f /etc/modules-load.d/msr.conf /etc/modules-load.d/msr-sck.conf /usr/lib/modules-load.d/msr-sck.conf
-modprobe -r msr 2>/dev/null || true
+rm -f /etc/modules-load.d/msr.conf /etc/modules-load.d/msr-sck.conf \
+      /etc/modules-load.d/msr-sck-amd.conf /etc/modules-load.d/msr-sck-sensors.conf \
+      /usr/lib/modules-load.d/msr-sck.conf
+# note: modules stay loaded until reboot (hot-unload races with concurrent MSR readers)
+
+# 3b) DKMS amd_hsmp: only if our installer set it up (marker file)
+if [ -f /var/lib/msr-sck/dkms-amd-hsmp ]; then
+  HV=$(cat /var/lib/msr-sck/dkms-amd-hsmp)
+  dkms remove -m amd_hsmp -v "$HV" --all 2>/dev/null || true
+  rm -rf "/usr/src/amd_hsmp-$HV"
+  echo "== removed DKMS amd_hsmp $HV (installed by msr-sck) =="
+elif command -v dkms >/dev/null 2>&1 && dkms status 2>/dev/null | grep -q '^amd_hsmp'; then
+  echo "== note: DKMS amd_hsmp not installed by msr-sck - kept =="
+fi
+rm -rf /var/lib/msr-sck
 
 # 4) repo configs we may have suggested
 rm -f /etc/apt/sources.list.d/msr-sck.list
@@ -47,5 +60,5 @@ for f in /usr/local/bin/msr-sck /usr/bin/msr-sck /usr/local/bin/rdmsr /usr/libex
 done
 if [ -n "$LEFT" ]; then echo "== WARNING: leftovers:$LEFT =="; exit 1; fi
 echo "== msr-sck fully removed =="
-[ "$PURGE" = 0 ] && echo "(deps gcc/dmidecode kept; rerun with --purge-deps to remove them too)"
+[ "$PURGE" = 0 ] && echo "(shared deps gcc/dmidecode/dkms/git kept; rerun with --purge-deps for gcc/dmidecode)"
 exit 0

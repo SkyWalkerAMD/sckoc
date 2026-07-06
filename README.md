@@ -2,7 +2,7 @@
 
 Intel/AMD 服务器与工作站的只读硬件监控工具,基于 [intel/msr-tools](https://github.com/intel/msr-tools) 的 `rdmsr` 派生。纯读取设计,兼容 Secure Boot / kernel lockdown (integrity) 环境。
 
-**当前版本: 1.0.2**
+**当前版本: 1.0.3**
 
 ## 支持平台
 
@@ -46,8 +46,8 @@ curl -fsSL https://raw.githubusercontent.com/SkyWalkerAMD/msr-sck/main/install.s
 **方式二:软件包**(从 [Releases](https://github.com/SkyWalkerAMD/msr-sck/releases) 下载)
 
 ```bash
-sudo dnf install -y https://github.com/SkyWalkerAMD/msr-sck/releases/download/1.0.2/msr-sck-1.0.2-1.fc44.x86_64.rpm      # Rocky/RHEL/Fedora
-sudo dnf install -y https://github.com/SkyWalkerAMD/msr-sck/releases/download/1.0.2/msr-sck_1.0.2-1_amd64.deb        # Ubuntu/Debian
+sudo dnf install -y https://github.com/SkyWalkerAMD/msr-sck/releases/download/1.0.3/msr-sck-1.0.3-1.fc44.x86_64.rpm      # Rocky/RHEL/Fedora
+sudo dnf install -y https://github.com/SkyWalkerAMD/msr-sck/releases/download/1.0.3/msr-sck_1.0.3-1_amd64.deb        # Ubuntu/Debian
 ```
 
 **方式三:软件仓库**(添加一次,之后 `dnf/apt install msr-sck` 并自动获得更新)
@@ -88,7 +88,7 @@ sudo watch -n 3 msr-sck         # 持续刷新
 sudo msr-sck uninstall          # 交互确认,加 -y 跳过
 ```
 
-自动识别安装方式(脚本 / rpm / deb)并完整清除,包括历史版本文件、bash 补全、模块自动加载配置和软件源配置。默认保留 gcc/dmidecode 等系统共享包,不删除 DKMS 驱动(amd_hsmp)与内核模块本体。工具损坏无法执行时的兜底:
+自动识别安装方式(脚本 / rpm / deb)并完整清除,包括历史版本文件、bash 补全、模块自动加载配置和软件源配置。默认保留 gcc/dmidecode/dkms/git 等系统共享包。由 install.sh 自动配置的 DKMS amd_hsmp 驱动会一并移除(通过标记文件识别);若 amd_hsmp 是你手动安装的,则予以保留并提示手动清除命令。已加载的内核模块保留至下次重启(热卸载与并发读取者存在竞态)。工具损坏无法执行时的兜底:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/SkyWalkerAMD/msr-sck/main/uninstall.sh | sudo bash

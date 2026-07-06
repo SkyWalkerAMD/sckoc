@@ -444,7 +444,7 @@ gcc -Wall -O2 "$T/hsmp-msg.c" -o /usr/local/bin/hsmp-msg
 cat > /usr/local/bin/msr-sck <<'MSR_SH'
 #!/bin/bash
 # msr-sck: Intel/AMD read-only hardware monitor (rdmsr wrapper, no writes)
-MSRVER=1.0.2
+MSRVER=1.0.3
 set -e
 LIBEXEC=/usr/libexec/msr-sck
 RDMSR="${RDMSR:-$( [ -x "$LIBEXEC/rdmsr" ] && echo "$LIBEXEC/rdmsr" || command -v rdmsr || echo rdmsr )}"
@@ -472,10 +472,20 @@ case "${1:-}" in
           /etc/bash_completion.d/msr-sck \
           /etc/modules-load.d/msr.conf /etc/modules-load.d/msr-sck.conf /etc/modules-load.d/msr-sck-amd.conf /etc/modules-load.d/msr-sck-sensors.conf /usr/lib/modules-load.d/msr-sck.conf \
           /etc/apt/sources.list.d/msr-sck.list
+    if [ -f /var/lib/msr-sck/dkms-amd-hsmp ]; then
+      HV=$(cat /var/lib/msr-sck/dkms-amd-hsmp)
+      dkms remove -m amd_hsmp -v "$HV" --all 2>/dev/null || true
+      rm -rf "/usr/src/amd_hsmp-$HV"
+      echo "removed DKMS amd_hsmp $HV (installed by msr-sck installer)"
+    elif command -v dkms >/dev/null 2>&1 && dkms status 2>/dev/null | grep -q '^amd_hsmp'; then
+      echo "note: DKMS amd_hsmp was NOT installed by msr-sck - kept."
+      echo "      remove manually: dkms remove -m amd_hsmp -v <ver> --all; rm -rf /usr/src/amd_hsmp-<ver>"
+    fi
+    rm -rf /var/lib/msr-sck
     if command -v dnf >/dev/null && dnf copr list 2>/dev/null | grep -q msr-sck; then
       dnf -y copr remove skywalkeramd/msr-sck 2>/dev/null || dnf -y copr disable skywalkeramd/msr-sck 2>/dev/null || true
     fi
-    echo "msr-sck fully removed. (deps gcc/dmidecode kept)"
+    echo "msr-sck fully removed. (shared deps gcc/dmidecode/dkms/git kept; loaded kernel modules stay until reboot)"
     exit 0 ;;
 esac
 
@@ -829,7 +839,9 @@ if [ "$(awk '/vendor_id/{print $3;exit}' /proc/cpuinfo)" = AuthenticAMD ]; then
       [ -d "/usr/src/amd_hsmp-$HV" ] || git clone https://github.com/amd/amd_hsmp.git "/usr/src/amd_hsmp-$HV" || echo "== git clone failed (network?) =="
       if [ -d "/usr/src/amd_hsmp-$HV" ]; then
         dkms status 2>/dev/null | grep -q "amd_hsmp.*$HV" || dkms add -m amd_hsmp -v "$HV" || true
-        { dkms build -m amd_hsmp -v "$HV" && dkms install -m amd_hsmp -v "$HV"; } || echo "== DKMS build failed, FCLK/PPT will show N/A =="
+        if dkms build -m amd_hsmp -v "$HV" && dkms install -m amd_hsmp -v "$HV"; then
+          mkdir -p /var/lib/msr-sck && echo "$HV" > /var/lib/msr-sck/dkms-amd-hsmp
+        else echo "== DKMS build failed, FCLK/PPT will show N/A =="; fi
         modprobe hsmp_acpi 2>/dev/null || modprobe amd_hsmp 2>/dev/null || true
       fi
     fi

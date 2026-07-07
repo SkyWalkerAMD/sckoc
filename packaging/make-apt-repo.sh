@@ -14,5 +14,8 @@ apt-ftparchive \
   -o APT::FTPArchive::Release::Components=main \
   release dists/stable > /tmp/Release.tmp
 mv /tmp/Release.tmp dists/stable/Release
+# ship the one-line repo setup script alongside the apt repo
+[ -f ../packaging/setup.sh ] && cp ../packaging/setup.sh setup.sh && chmod +x setup.sh
+[ -f ../setup.sh ] && cp ../setup.sh setup.sh && chmod +x setup.sh
 printf '<h1>msr-sck apt repository</h1><p>See <a href="https://github.com/SkyWalkerAMD/msr-sck">GitHub</a> for install instructions.</p>' > index.html
-echo "apt repo ready under apt-repo/"
+echo "apt repo ready under apt-repo/ (setup.sh included if present)"

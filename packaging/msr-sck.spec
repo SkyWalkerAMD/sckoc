@@ -1,5 +1,5 @@
 Name:           msr-sck
-Version:        1.1.2
+Version:        1.1.3
 Release:        1%{?dist}
 Summary:        Read-only hardware monitor for Intel/AMD servers (rdmsr-based)
 License:        GPL-2.0-only
@@ -53,6 +53,9 @@ if [ "$1" = 0 ]; then rm -f /etc/modules-load.d/msr-sck-amd.conf; fi
 %{_prefix}/lib/modules-load.d/msr-sck.conf
 
 %changelog
+* Tue Jul 07 2026 SkyWalkerAMD <scka7t@gmail.com> - 1.1.3-1
+- replace COPYING with standard GPLv2 text (fix incorrect-fsf-address for Fedora review)
+
 * Tue Jul 07 2026 SkyWalkerAMD <you@example.com> - 1.1.2-1
 - fix: 'local' used outside a function in the vcore command dispatch (harmless stderr warning on AMD, now clean)
 

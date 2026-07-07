@@ -52,7 +52,7 @@ curl -fsSL https://raw.githubusercontent.com/SkyWalkerAMD/msr-sck/main/install.s
 # Rocky/RHEL/Fedora
 sudo dnf install -y https://github.com/SkyWalkerAMD/msr-sck/releases/download/1.1.3/msr-sck-1.1.3-1.fc44.x86_64.rpm
 # Ubuntu/Debian
-sudo dnf install -y https://github.com/SkyWalkerAMD/msr-sck/releases/download/1.1.3/msr-sck_1.1.3-1_amd64.deb
+sudo apt install -y https://github.com/SkyWalkerAMD/msr-sck/releases/download/1.1.3/msr-sck_1.1.3-1_amd64.deb
 ```
 
 **方式三：软件仓库**（添加一次，之后 `dnf/apt install msr-sck` 并自动获得更新）

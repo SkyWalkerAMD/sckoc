@@ -1,5 +1,5 @@
 Name:           msr-sck
-Version:        1.1.1
+Version:        1.1.2
 Release:        1%{?dist}
 Summary:        Read-only hardware monitor for Intel/AMD servers (rdmsr-based)
 License:        GPL-2.0-only
@@ -53,6 +53,9 @@ if [ "$1" = 0 ]; then rm -f /etc/modules-load.d/msr-sck-amd.conf; fi
 %{_prefix}/lib/modules-load.d/msr-sck.conf
 
 %changelog
+* Tue Jul 07 2026 SkyWalkerAMD <you@example.com> - 1.1.2-1
+- fix: 'local' used outside a function in the vcore command dispatch (harmless stderr warning on AMD, now clean)
+
 * Tue Jul 07 2026 SkyWalkerAMD <you@example.com> - 1.1.1-1
 - add setup.sh one-line repo bootstrap (curl | sudo bash) for easier dnf/apt install
 - make-apt-repo ships setup.sh to the pages site

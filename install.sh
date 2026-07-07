@@ -444,7 +444,7 @@ gcc -Wall -O2 "$T/hsmp-msg.c" -o /usr/local/bin/hsmp-msg
 cat > /usr/local/bin/msr-sck <<'MSR_SH'
 #!/bin/bash
 # msr-sck: Intel/AMD read-only hardware monitor (rdmsr wrapper, no writes)
-MSRVER=1.0.3
+MSRVER=1.1.0
 set -e
 LIBEXEC=/usr/libexec/msr-sck
 RDMSR="${RDMSR:-$( [ -x "$LIBEXEC/rdmsr" ] && echo "$LIBEXEC/rdmsr" || command -v rdmsr || echo rdmsr )}"
@@ -452,7 +452,40 @@ INT="${INT:-1}"
 rf(){ "$RDMSR" -p "$1" -u "$2" 2>/dev/null || echo 0; }
 bits(){ echo $(( ($1 >> $2) & ((1 << $3) - 1) )); }
 
+usage(){
+  cat <<USAGE
+msr-sck $MSRVER - read-only MSR/HSMP hardware monitor for Intel & AMD
+
+USAGE:
+  msr-sck [mon]              full monitor panel (default when no argument)
+  msr-sck vcore             per-core / per-rail core voltage
+  msr-sck dump <reg> [hi:lo]  read an MSR on every socket, optional bitfield
+  msr-sck uninstall [-y]    remove msr-sck (auto-detects script/rpm/deb install)
+  msr-sck version | -V      print version
+  msr-sck help | -h         this help
+
+ENVIRONMENT:
+  INT=<sec>                 sampling window for freq/power/C0 (default 1)
+  DMI=<path>                override dmidecode path
+
+EXAMPLES:
+  sudo msr-sck                       # one-shot overview
+  sudo INT=2 msr-sck                 # 2-second sampling window
+  sudo watch -n 3 msr-sck            # refresh every 3 s
+  sudo msr-sck vcore                 # core voltage per core / rail
+  sudo msr-sck dump 0x198 47:32      # Intel Vcore field, all sockets
+  sudo msr-sck dump 0xC0010064       # AMD P-state 0 definition
+  sudo msr-sck uninstall -y          # remove without prompt
+
+NOTES:
+  Root required. Reads only - never writes MSRs (Secure Boot / lockdown safe).
+  Intel needs the msr module. AMD FCLK/PPT need /dev/hsmp (amd_hsmp or hsmp_acpi
+  plus BIOS HSMP). AMD temperature needs k10temp. Voltage rails need a board
+  Super I/O driver (nct6775 etc).
+USAGE
+}
 case "${1:-}" in
+  -h|--help|help) usage; exit 0 ;;
   -V|version) echo "msr-sck $MSRVER"; exit 0 ;;
   uninstall)
     [ "$(id -u)" = 0 ] || { echo "run as root: sudo msr-sck uninstall"; exit 1; }
@@ -512,6 +545,33 @@ siblings(){
   for t in ${l//,/ }; do
     case "$t" in *-*) seq "${t%-*}" "${t#*-}";; *) echo "$t";; esac
   done | sort -n
+}
+# board-specific nct6798 channel -> CPU rail map (verified by BIOS-vs-sysfs delta test)
+# returns "railN_mV railM_mV ..." for known boards, empty otherwise
+board_nct(){
+  local dir="$1"   # hwmon dir of nct chip
+  local board
+  board=$( (${DMI:-dmidecode} -s baseboard-product-name 2>/dev/null || :) | head -1)
+  case "$board" in
+    *WRX90E-SAGE*)
+      # in0=VDDCR_CPU0, in6=VDDCR_CPU1 (both confirmed vs BIOS override delta on 9995WX)
+      echo "VDDCR_CPU0:$(cat "$dir/in0_input" 2>/dev/null) VDDCR_CPU1:$(cat "$dir/in6_input" 2>/dev/null)"
+      ;;
+    *) echo "" ;;
+  esac
+}
+# fetch a single mapped rail value in volts, or empty. $1=rail label
+board_vcore(){
+  local want="$1" h n pair k v
+  for h in /sys/class/hwmon/hwmon*; do
+    n=$(cat "$h/name" 2>/dev/null) || continue
+    case "$n" in nct*) ;; *) continue ;; esac
+    for pair in $(board_nct "$h"); do
+      k=${pair%%:*}; v=${pair#*:}
+      [ "$k" = "$want" ] && [ -n "$v" ] && { awk "BEGIN{printf \"%.3f\", $v/1000}"; return 0; }
+    done
+  done
+  return 1
 }
 platform_info(){
   local sb ld oc="" f
@@ -678,8 +738,19 @@ amd_sock(){
     plm=$(hsmp_q 0x07 1 "$1") || plm=""
     ppt="  PPT $(wt "$pl/1000") W${plm:+ (Max $(wt "$plm/1000") W)}"
   fi
-  local vc; vc=$(amd_vid "$2")
-  printf "  S%s  Temp Max %s  Vcore %s%s\n" "$1" "$(amd_temp "$1")" "${vc:+~$vc V (P-state VID)}${vc:-N/A (fam$FAM VID unverified)}" "$ph"
+  # prefer real per-rail vcore from board sensor map; fall back to P-state nominal
+  local vctxt r0 r1
+  r0=$(board_vcore VDDCR_CPU0) || r0=""
+  r1=$(board_vcore VDDCR_CPU1) || r1=""
+  if [ -n "$r0" ] || [ -n "$r1" ]; then
+    vctxt="Vcore ${r0:+CPU0 $r0 V}${r0:+  }${r1:+CPU1 $r1 V}"
+  else
+    local vc; vc=$(amd_vid "$2")
+    if [ -z "$vc" ]; then vctxt="Vcore N/A"
+    elif [ "$FAM" -ge 26 ]; then vctxt="Vcore ~$vc V (P-state nominal, not rail V)"
+    else vctxt="Vcore ~$vc V (P-state VID)"; fi
+  fi
+  printf "  S%s  Temp Max %s  %s%s\n" "$1" "$(amd_temp "$1")" "$vctxt" "$ph"
   local fm="" cl="" bw="" c0=""
   if fm=$(hsmp_q 0x1C 1 "$1"); then fm="  Fmax $(( (fm>>16)&65535 )) MHz / Fmin $(( fm&65535 )) MHz"; else fm=""; fi
   if cl=$(hsmp_q 0x10 1 "$1"); then cl="  CCLK Limit $cl MHz"; else cl=""; fi
@@ -695,21 +766,33 @@ percore(){
   local c base eu=0
   for s in $SOCKETS; do TJ[$s]=$(bits "$(rf "${REP[$s]}" 0x1A2)" 16 8); done
   [ "$VEN" = AuthenticAMD ] && eu=$(bits "$(rf 0 0xC0010299)" 8 5)
-  local -A CCD CCDT PKGMIN
+  local -A CCD CCDT PKGMIN PKGSTEP TCTL
   if [ "$VEN" = AuthenticAMD ]; then
-    local l3 pk h f lab s=0
+    local l3 pk h f lab s=0 prev
     for c in $CPUS; do
       l3=$(cat "$CPUROOT/cpu$c/cache/index3/id" 2>/dev/null) || l3=-1
       CCD[$c]=$l3
       pk=$(cat "$CPUROOT/cpu$c/topology/physical_package_id" 2>/dev/null || echo 0)
-      if [ "$l3" -ge 0 ] && { [ -z "${PKGMIN[$pk]}" ] || [ "$l3" -lt "${PKGMIN[$pk]}" ]; }; then PKGMIN[$pk]=$l3; fi
+      if [ "$l3" -ge 0 ]; then
+        if [ -z "${PKGMIN[$pk]}" ] || [ "$l3" -lt "${PKGMIN[$pk]}" ]; then PKGMIN[$pk]=$l3; fi
+        # smallest positive delta between distinct L3 ids = CCD numbering step (1 on EPYC, 2 on fam26)
+        prev=${PKGMIN[$pk]}
+        if [ "$l3" -gt "$prev" ]; then
+          local d=$(( l3 - prev ))
+          [ -z "${PKGSTEP[$pk]}" ] && PKGSTEP[$pk]=$d
+          [ "$d" -lt "${PKGSTEP[$pk]}" ] && [ "$d" -gt 0 ] && PKGSTEP[$pk]=$d
+        fi
+      fi
     done
     for h in "${HWROOT:-/sys/class/hwmon}"/hwmon*; do
       [ "$(cat "$h/name" 2>/dev/null)" = k10temp ] || continue
       for f in "$h"/temp[0-9]*_label; do
         [ -e "$f" ] || continue
         lab=$(cat "$f")
-        case "$lab" in Tccd[0-9]*) CCDT["$s:$(( ${lab#Tccd} - 1 ))"]=$(( $(cat "${f%_label}_input") / 1000 )) ;; esac
+        case "$lab" in
+          Tccd[0-9]*) CCDT["$s:$(( ${lab#Tccd} - 1 ))"]=$(( $(cat "${f%_label}_input") / 1000 )) ;;
+          Tctl)       TCTL[$s]=$(( $(cat "${f%_label}_input") / 1000 )) ;;
+        esac
       done
       s=$((s+1))
     done
@@ -744,14 +827,18 @@ percore(){
       base=$(( $(amd_p0 "$c") / 100 ))
       local e2 dE; e2=$(bits "$(rf "$c" 0xC001029A)" 0 32)
       dE=$(( e2>=E1[$c] ? e2-E1[$c] : e2-E1[$c]+4294967296 ))
-      local pk2 rel tp td cd
+      local pk2 rel tp td cd step
       pk2=$(cat "$CPUROOT/cpu$c/topology/physical_package_id" 2>/dev/null || echo 0)
+      step=${PKGSTEP[$pk2]:-1}; [ "$step" -lt 1 ] && step=1
       if [ "${CCD[$c]}" -ge 0 ] && [ -n "${PKGMIN[$pk2]}" ]; then
-        rel=$(( CCD[$c] - PKGMIN[$pk2] ))
+        rel=$(( (CCD[$c] - PKGMIN[$pk2]) / step ))
         tp=${CCDT["$pk2:$rel"]:-}
         cd=$(printf 'ccd%-2d' "$rel")
-      else tp=""; cd="ccd- "; fi
-      if [ -n "$tp" ]; then td="$(printf '%3d' "$tp")°C"; else td=" N/A "; fi
+      else rel=-1; tp=""; cd="ccd- "; fi
+      # Tccd missing (e.g. k10temp lacks per-CCD on fam26): fall back to socket Tctl, mark with *
+      if [ -n "$tp" ]; then td="$(printf '%3d' "$tp")°C"
+      elif [ -n "${TCTL[0]}" ]; then td="$(printf '%3d' "${TCTL[0]}")*C"
+      else td=" N/A "; fi
       extra="  $(printf '%6s' "$(wt "($dE) * ($base) * 100000000 / (2^$eu * ($dt))")") W  $cd $td  C0 $(printf '%3d' "$c0m")%"
     fi
     printf "  core%-3d %5d MHz%s\n" "$c" $(( base * 100 * bm / 1000 )) "$extra"
@@ -768,7 +855,11 @@ mon(){
   if [ "$VEN" = GenuineIntel ]; then
     echo "  Core      Freq      Temp   Vcore        C0      C6"
   else
-    echo "  Core      Freq       Power     CCD-Temp     C0"
+    if [ "$VEN" = AuthenticAMD ] && [ -z "${CCDT[0:0]}" ]; then
+      echo "  Core      Freq       Power     CCD-Temp     C0   (*C = socket Tctl; k10temp lacks per-CCD)"
+    else
+      echo "  Core      Freq       Power     CCD-Temp     C0"
+    fi
   fi
   percore
 }
@@ -786,16 +877,32 @@ case "${1:-mon}" in
         printf "  core%-3d %s V\n" "$c" "$(wt4 "$(bits "$(rf "$c" 0x198)" 32 16)/8192")"
       done
     else
+      local br0 br1 v
+      br0=$(board_vcore VDDCR_CPU0) || br0=""
+      br1=$(board_vcore VDDCR_CPU1) || br1=""
+      if [ -n "$br0" ] || [ -n "$br1" ]; then
+        echo "== Per-rail Vcore (board sensor, nct6798) =="
+        [ -n "$br0" ] && printf "  VDDCR_CPU0  %s V\n" "$br0"
+        [ -n "$br1" ] && printf "  VDDCR_CPU1  %s V\n" "$br1"
+        echo "  (per-core identical: AMD exposes no per-core voltage; rails are VRM-domain)"
+        exit 0
+      fi
       v=$(amd_vid 0)
-      [ -n "$v" ] || { echo "fam$FAM P-state VID 布局未验证 (需 zenpower/ryzen_smu 读实测)"; exit 1; }
-      echo "== Per-core Vcore (P-state VID 标称值; per-rail 覆盖与 LLC 不可见, 实测见 hwmon Rails) =="
+      [ -n "$v" ] || { echo "fam$FAM P-state VID 未验证 (需 zenpower/ryzen_smu 或已收录主板)"; exit 1; }
+      if [ "$FAM" -ge 26 ]; then
+        echo "== Per-core Vcore: P-state nominal only. fam26 dual-rail BIOS voltage is NOT in MSR =="
+        echo "==   Real per-rail needs a mapped board sensor or BIOS. =="
+      else
+        echo "== Per-core Vcore (P-state VID; per-rail override & LLC not visible) =="
+      fi
       for c in $CPUS; do
         [ "$(siblings "$c" | head -1)" = "$c" ] || continue
         printf "  core%-3d ~%s V\n" "$c" "$(amd_vid "$c")"
       done
     fi ;;
   -V|version) echo "msr-sck $MSRVER"; exit 0 ;;
-  *) echo "Usage: msr-sck [mon|vcore] | dump <reg> [hi:lo] | uninstall [-y] | -V | INT=<sec> msr-sck"; exit 1 ;;
+  -h|--help|help) usage; exit 0 ;;
+  *) echo "msr-sck: unknown command '$1'"; echo "try: msr-sck help"; exit 1 ;;
 esac
 MSR_SH
 chmod 755 /usr/local/bin/rdmsr /usr/local/bin/hsmp-msg /usr/local/bin/msr-sck
@@ -803,8 +910,22 @@ chmod 755 /usr/local/bin/rdmsr /usr/local/bin/hsmp-msg /usr/local/bin/msr-sck
 mkdir -p /etc/bash_completion.d
 cat > /etc/bash_completion.d/msr-sck <<'COMP_SH'
 _msr_sck(){
-  local cur=${COMP_WORDS[COMP_CWORD]}
-  [ "$COMP_CWORD" -eq 1 ] && COMPREPLY=($(compgen -W "mon dump vcore -V version" -- "$cur"))
+  local cur prev
+  cur=${COMP_WORDS[COMP_CWORD]}
+  prev=${COMP_WORDS[COMP_CWORD-1]}
+  local cmds="mon vcore dump uninstall version help -V -h --help"
+  if [ "$COMP_CWORD" -eq 1 ]; then
+    COMPREPLY=($(compgen -W "$cmds" -- "$cur"))
+    return
+  fi
+  case "$prev" in
+    dump)
+      COMPREPLY=($(compgen -W "0x10 0x198 0x1A2 0xCE 0xC0010063 0xC0010064 0xC0010299 0xC001029A 0xC001029B" -- "$cur"))
+      return ;;
+    uninstall)
+      COMPREPLY=($(compgen -W "-y" -- "$cur"))
+      return ;;
+  esac
 }
 complete -F _msr_sck msr-sck
 COMP_SH

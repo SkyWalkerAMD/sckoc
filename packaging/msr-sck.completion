@@ -1,5 +1,19 @@
 _msr_sck(){
-  local cur=${COMP_WORDS[COMP_CWORD]}
-  [ "$COMP_CWORD" -eq 1 ] && COMPREPLY=($(compgen -W "mon dump vcore uninstall -V version" -- "$cur"))
+  local cur prev
+  cur=${COMP_WORDS[COMP_CWORD]}
+  prev=${COMP_WORDS[COMP_CWORD-1]}
+  local cmds="mon vcore dump uninstall version help -V -h --help"
+  if [ "$COMP_CWORD" -eq 1 ]; then
+    COMPREPLY=($(compgen -W "$cmds" -- "$cur"))
+    return
+  fi
+  case "$prev" in
+    dump)
+      COMPREPLY=($(compgen -W "0x10 0x198 0x1A2 0xCE 0xC0010063 0xC0010064 0xC0010299 0xC001029A 0xC001029B" -- "$cur"))
+      return ;;
+    uninstall)
+      COMPREPLY=($(compgen -W "-y" -- "$cur"))
+      return ;;
+  esac
 }
 complete -F _msr_sck msr-sck

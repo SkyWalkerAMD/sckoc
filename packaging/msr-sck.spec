@@ -1,5 +1,5 @@
 Name:           msr-sck
-Version:        1.0.3
+Version:        1.1.0
 Release:        1%{?dist}
 Summary:        Read-only hardware monitor for Intel/AMD servers (rdmsr-based)
 License:        GPL-2.0-only
@@ -53,6 +53,19 @@ if [ "$1" = 0 ]; then rm -f /etc/modules-load.d/msr-sck-amd.conf; fi
 %{_prefix}/lib/modules-load.d/msr-sck.conf
 
 %changelog
+* Tue Jul 07 2026 SkyWalkerAMD <you@example.com> - 1.1.0-1
+- AMD Vcore: real dual-rail readout on ASUS WRX90E-SAGE via nct6798 (VDDCR_CPU0=in0, VDDCR_CPU1=in6), verified by BIOS override delta test
+- AMD per-core: fix CCD numbering (L3-id step normalization, fam26 now 0..11) and Tctl fallback when k10temp lacks per-CCD
+- installer auto-provisions k10temp + HSMP (DKMS hsmp_acpi) + board sensor drivers
+- uninstall removes installer-provisioned DKMS (marker-based), all module configs
+- bash completion: full subcommand + dump register + uninstall flag completion
+- add 'help' subcommand with detailed usage and examples
+
+* Mon Jul 06 2026 SkyWalkerAMD <you@example.com> - 1.0.4-1
+- AMD per-core: fix CCD numbering (normalize L3-id step; fam26 was showing 0,2,4..22 -> now 0..11)
+- AMD per-core: CCD-Temp falls back to socket Tctl (marked *) when k10temp lacks per-CCD sensors (fam26 on kernel 6.8)
+- AMD Vcore: fam26 P-state VID labeled 'nominal, not rail V' (dual-rail BIOS voltage is not exposed via MSR)
+
 * Mon Jul 06 2026 SkyWalkerAMD <you@example.com> - 1.0.3-1
 - uninstall: remove installer-provisioned DKMS amd_hsmp (marker-based; user-installed kept with hint)
 - uninstall: clean all modules-load configs incl. amd/sensors; never hot-unload modules

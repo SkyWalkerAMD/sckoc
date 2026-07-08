@@ -55,7 +55,6 @@ jobs:
     needs:
       - build-deb
       - build-rpm
-    if: startsWith(github.ref, 'refs/tags/')
     runs-on: ubuntu-latest
 
     steps:
@@ -64,10 +63,27 @@ jobs:
           pattern: "*"
           merge-multiple: true
 
+      - name: Get latest release tag
+        id: get_tag
+        run: |
+          if [ "${{ github.ref_type }}" = "tag" ]; then
+            echo "TAG_NAME=${{ github.ref_name }}" >> $GITHUB_ENV
+          else
+            LATEST_TAG=$(gh release view --json tagName --template '{{.tagName}}' || echo "")
+            if [ -z "$LATEST_TAG" ]; then
+              echo "未找到任何已有的 Release，手動運行失敗。"
+              exit 1
+            fi
+            echo "TAG_NAME=$LATEST_TAG" >> $GITHUB_ENV
+          fi
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
       - name: attach to release
         uses: softprops/action-gh-release@v2
         with:
-          overwrite_files: true
+          tag_name: ${{ env.TAG_NAME }}
+          fail_on_unmatched_files: false
           files: |
             *.deb
             *.rpm

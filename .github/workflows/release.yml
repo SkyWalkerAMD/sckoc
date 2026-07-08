@@ -58,6 +58,9 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
+      # 修正：加上這一步，讓 GitHub CLI 能夠識別當前倉庫
+      - uses: actions/checkout@v4
+
       - uses: actions/download-artifact@v4
         with:
           pattern: "*"

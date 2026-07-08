@@ -1,18 +1,18 @@
 Architectures: amd64
 Codename: stable
 Components: main
-Date: Tue, 07 Jul 2026 06:19:35 +0000
-Origin: msr-sck
+Date: Wed, 08 Jul 2026 02:03:19 +0000
+Origin: sckoc
 Suite: stable
 MD5Sum:
- fe3f82e7cf7ada1171e7857467b7a395              742 main/binary-amd64/Packages
- a9232d214cf66fdc78bdb6a4630e8160              555 main/binary-amd64/Packages.gz
+ 31247a55394e363722fa89dde59fa304              736 main/binary-amd64/Packages
+ a62a39ee4f94d04c1224f30a54b19b50              554 main/binary-amd64/Packages.gz
 SHA1:
- a4fa8deb70a29e7122c4447305a27c484b120358              742 main/binary-amd64/Packages
- d0d88c9c04f00afc8eab349c1b15903fc9f96c96              555 main/binary-amd64/Packages.gz
+ 27c201ce680ba75454673f674beafa4670d389c7              736 main/binary-amd64/Packages
+ f87856b1ff83ac58305874ee9818a80d80010d12              554 main/binary-amd64/Packages.gz
 SHA256:
- 0d613f83646c2b4a40d68690e5e29874aa575deeeff3d0570be9c1864ebd26d0              742 main/binary-amd64/Packages
- a2886e45ef42caf29e7467081086b13303a54c5d5065ee28db2f9136ac524fd4              555 main/binary-amd64/Packages.gz
+ 801b880c6206c4a9b527fc2a5a89cc7be8758af2a6e686d8d3169efadd489f6d              736 main/binary-amd64/Packages
+ d00e8ae4e7d0669ed5cee39205fee599c16d9f128bb6c93bf0d7b87026de16d1              554 main/binary-amd64/Packages.gz
 SHA512:
- 994bf1924cd9d70b80b83082757e5af5301cd1daab1d6471debfaabdf573c965d7792db525f6a9a8dda0e41913d113f017060a65e0ede73ba417620f1d2d24fa              742 main/binary-amd64/Packages
- 5fb74be685d59c70c136d8ee0aae56adf32ec4b418a3fb75ed11c01c28184a3db82b17bcce54fd17f924689193ffa87950f7e40718cdc7770b76a1887841ed76              555 main/binary-amd64/Packages.gz
+ 6283523ee485f6f82a242e615a7f6b4362e3aa6be9547e235cff2cf524b4e4d9da4aa2dd57e369cc8e7e1a4749bef0925779ffe29acb53d6415682c70e26145c              736 main/binary-amd64/Packages
+ a7652477f630dd2c6593f3200f5ee8753f56440eb07baea117b16edf8214743d951d009bd6d038af724e862118bd5685306ac2ee1b1e031b3017f9adb73bf4ed              554 main/binary-amd64/Packages.gz

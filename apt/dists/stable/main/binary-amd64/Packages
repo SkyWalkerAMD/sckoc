@@ -1,20 +1,20 @@
-Package: msr-sck
-Version: 1.1.3-1
+Package: sckoc
+Version: 2.0.0-1
 Architecture: amd64
 Maintainer: SkyWalkerAMD <you@example.com>
 Depends: kmod
 Recommends: dmidecode
-Filename: pool/msr-sck_1.1.3-1_amd64.deb
-Size: 26294
-MD5sum: f925d0e3ba010a99f3c34a0520706b7a
-SHA1: a9cf1830d38ebb6d0b0f33870e3ac7c43a025843
-SHA256: 687fad1ecfc1cdd40f42c7d672536d786b43ec0570d4d73bb7c4e00a1529d9f5
+Filename: pool/sckoc_2.0.0-1_amd64.deb
+Size: 25228
+MD5sum: 6fde6d4746b112a8b8e8ed518752d687
+SHA1: f6438788b045bdb896e536ccd6a61ba83a6643ff
+SHA256: 3b5d8b0abdc9ff53d3efb5a81afcc703210a29af3e5b7df5ca959233868833e3
 Section: utils
 Priority: optional
-Homepage: https://github.com/GITHUB_USER/msr-sck
+Homepage: https://github.com/GITHUB_USER/sckoc
 Description: Read-only hardware monitor for Intel/AMD servers
  Reports per-socket and per-core voltage, temperature, frequency
  (core/mesh/IOD/DRAM), power (RAPL, PL1/PL2, PPT), C-state residency and
  platform security state. Works under Secure Boot / lockdown (integrity).
- Derived from intel/msr-tools rdmsr.
+ Derived from intel/msr-tools sckoc.
 

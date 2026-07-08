@@ -1,12 +1,12 @@
 #!/bin/sh
-# msr-sck repository setup - adds the right repo for your distro,
-# then you can use the normal 'dnf install msr-sck' or 'apt install msr-sck'.
-# Usage:  curl -fsSL https://skywalkeramd.github.io/msr-sck/apt/setup.sh | sudo bash
+# sckoc repository setup - adds the right repo for your distro,
+# then you can use the normal 'dnf install sckoc' or 'apt install sckoc'.
+# Usage:  curl -fsSL https://skywalkeramd.github.io/sckoc/apt/setup.sh | sudo bash
 set -e
 
 COPR_OWNER=skywalkeramd
-COPR_PROJECT=msr-sck
-APT_URL="https://skywalkeramd.github.io/msr-sck/apt"
+COPR_PROJECT=sckoc
+APT_URL="https://skywalkeramd.github.io/sckoc/apt"
 
 [ "$(id -u)" = 0 ] || { echo "run as root (sudo)"; exit 1; }
 
@@ -25,17 +25,17 @@ if is_cmd dnf || is_cmd yum; then
         $PM -y install yum-plugin-copr
         $PM -y copr enable "$COPR_OWNER/$COPR_PROJECT"
     fi
-    echo "== done. now run:  $PM install msr-sck =="
+    echo "== done. now run:  $PM install sckoc =="
 
 elif is_cmd apt-get; then
     echo "== detected Debian/Ubuntu ($ID $VERSION_ID), adding apt repo =="
-    echo "deb [trusted=yes] $APT_URL stable main" > /etc/apt/sources.list.d/msr-sck.list
+    echo "deb [trusted=yes] $APT_URL stable main" > /etc/apt/sources.list.d/sckoc.list
     apt-get update
-    echo "== done. now run:  apt install msr-sck =="
+    echo "== done. now run:  apt install sckoc =="
 
 else
     echo "no supported package manager found (need dnf/yum or apt)."
     echo "use the one-shot installer instead:"
-    echo "  curl -fsSL https://raw.githubusercontent.com/SkyWalkerAMD/msr-sck/main/install.sh | sudo bash"
+    echo "  curl -fsSL https://raw.githubusercontent.com/SkyWalkerAMD/sckoc/main/install.sh | sudo bash"
     exit 1
 fi

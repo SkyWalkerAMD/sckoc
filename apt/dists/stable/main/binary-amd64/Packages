@@ -1,20 +1,19 @@
 Package: sckoc
-Version: 2.0.0-1
+Version: 2.0.0-2
 Architecture: amd64
-Maintainer: SkyWalkerAMD <you@example.com>
+Maintainer: SkyWalkerAMD <scka7t@gmail.com>
 Depends: kmod
 Recommends: dmidecode
-Filename: pool/sckoc_2.0.0-1_amd64.deb
-Size: 25228
-MD5sum: ec2eac68198d3b99740fa124316e12ff
-SHA1: 46e48daa006d455f814305465b4e2aa13936e479
-SHA256: 409ed48465664adb90e88cf555b7fa02c57ebe95790b07254cc66b48cbea31dd
+Filename: pool/sckoc_2.0.0-2_amd64.deb
+Size: 25602
+MD5sum: 035c4f2aac470df60a2213be39e647f3
+SHA1: 8f36ea541c25c92f2e03049f91700c686396d7da
+SHA256: 318f91b0dba6037e0a331b6fe9b2023a96a02b8d4de3b33a4bd66d7a5f1b09fc
 Section: utils
 Priority: optional
-Homepage: https://github.com/GITHUB_USER/sckoc
+Homepage: https://github.com/SkyWalkerAMD/sckoc
 Description: Read-only hardware monitor for Intel/AMD servers
  Reports per-socket and per-core voltage, temperature, frequency
  (core/mesh/IOD/DRAM), power (RAPL, PL1/PL2, PPT), C-state residency and
  platform security state. Works under Secure Boot / lockdown (integrity).
- Derived from intel/msr-tools sckoc.
 

@@ -150,4 +150,4 @@ curl -fsSL https://raw.githubusercontent.com/SkyWalkerAMD/sckoc/main/uninstall.s
 
 ## License
 
-本项目以 GPL-2.0 许可发布，全部代码均为原创，包括监控主程序 `sckoc`、MSR 读取程序 `readoc`、AMD HSMP 交互 `hsmp-msg.c` 以及打包与安装脚本。
+本项目以 GPL-2.0 许可发布，全部代码均为原创，包括监控主程序 `sckoc`、MSR 读取程序 `readoc`、AMD HSMP 交互 `hsmp-msg.c` 以及打包与安装脚本。未经许可不得用于商业用途。

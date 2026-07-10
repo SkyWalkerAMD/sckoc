@@ -11,11 +11,19 @@ permissions:
 jobs:
   build-deb:
     runs-on: ubuntu-latest
+    # 在老 glibc 的容器里编译：产出的 deb 兼容 Ubuntu 20.04+ / Debian 11+，
+    # 直接跑在 ubuntu-latest(24.04, glibc 2.39)上编出的二进制装不进老系统
+    container: ubuntu:20.04
+    env:
+      DEBIAN_FRONTEND: noninteractive
     steps:
       - uses: actions/checkout@v4
 
       - name: build deb
-        run: bash packaging/build-deb.sh
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends gcc
+          bash packaging/build-deb.sh
 
       - uses: actions/upload-artifact@v4
         with:
@@ -24,7 +32,19 @@ jobs:
 
   build-rpm:
     runs-on: ubuntu-latest
-    container: fedora:latest
+    strategy:
+      matrix:
+        include:
+          - image: rockylinux:8
+            label: el8
+          - image: rockylinux:9
+            label: el9
+          # el10 需要时取消注释（官方 library 尚无 rockylinux:10，用组织镜像或 almalinux）
+          # - image: rockylinux/rockylinux:10
+          #   label: el10
+          - image: fedora:latest
+            label: fedora
+    container: ${{ matrix.image }}
     steps:
       - uses: actions/checkout@v4
 
@@ -44,11 +64,12 @@ jobs:
 
           rpmbuild -ba packaging/sckoc.spec
 
-          cp "$HOME"/rpmbuild/RPMS/x86_64/*.rpm .
+          # 只发布主包，debuginfo/debugsource 不上 Release
+          cp "$HOME"/rpmbuild/RPMS/x86_64/sckoc-"$V"-*.rpm .
 
       - uses: actions/upload-artifact@v4
         with:
-          name: rpm
+          name: rpm-${{ matrix.label }}
           path: "*.rpm"
 
   release:

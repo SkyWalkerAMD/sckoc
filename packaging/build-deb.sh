@@ -1,7 +1,7 @@
 #!/bin/bash
 # build sckoc .deb — run from repo root: bash packaging/build-deb.sh
 set -e
-V=2.0.0; R=2; A=$(dpkg --print-architecture 2>/dev/null || echo amd64)
+V=2.0.0; R=3; A=$(dpkg --print-architecture 2>/dev/null || echo amd64)
 D=$(mktemp -d)
 # helpers are compiled under their real names; /usr/bin/sckoc is the SCRIPT
 gcc -Wall -O2 -D_GNU_SOURCE -D_FILE_OFFSET_BITS=64 -I. readoc.c -o "$D/readoc"
@@ -12,6 +12,8 @@ install -D -m755 "$D/readoc"    "$P/usr/libexec/sckoc/readoc"
 install -D -m755 "$D/hsmp-msg"  "$P/usr/libexec/sckoc/hsmp-msg"
 install -D -m644 packaging/sckoc.completion "$P/usr/share/bash-completion/completions/sckoc"
 install -D -m644 packaging/sckoc.modules-load "$P/usr/lib/modules-load.d/sckoc.conf"
+install -D -m644 packaging/sckoc.1 "$P/usr/share/man/man1/sckoc.1"
+gzip -9n "$P/usr/share/man/man1/sckoc.1"
 install -D -m644 COPYING "$P/usr/share/doc/sckoc/copyright"
 install -D -m644 README.md "$P/usr/share/doc/sckoc/README.md"
 mkdir -p "$P/DEBIAN"

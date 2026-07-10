@@ -1,6 +1,6 @@
 Name:           sckoc
 Version:        2.0.0
-Release:        2%{?dist}
+Release:        3%{?dist}
 Summary:        Read-only hardware monitor for Intel/AMD servers
 License:        GPL-2.0-only
 URL:            https://github.com/SkyWalkerAMD/sckoc
@@ -34,6 +34,7 @@ install -D -p -m0755 readoc   %{buildroot}%{_libexecdir}/%{name}/readoc
 install -D -p -m0755 hsmp-msg %{buildroot}%{_libexecdir}/%{name}/hsmp-msg
 install -D -p -m0644 packaging/sckoc.completion %{buildroot}%{_datadir}/bash-completion/completions/sckoc
 install -D -p -m0644 packaging/sckoc.modules-load %{buildroot}%{_prefix}/lib/modules-load.d/sckoc.conf
+install -D -p -m0644 packaging/sckoc.1 %{buildroot}%{_mandir}/man1/sckoc.1
 # ghost placeholder: the post scriptlet may create this on AMD hosts
 mkdir -p %{buildroot}%{_sysconfdir}/modules-load.d
 touch %{buildroot}%{_sysconfdir}/modules-load.d/sckoc-amd.conf
@@ -66,10 +67,15 @@ if [ "$1" = 0 ]; then rm -f /etc/modules-load.d/sckoc-amd.conf; fi
 %dir %{_datadir}/bash-completion
 %dir %{_datadir}/bash-completion/completions
 %{_datadir}/bash-completion/completions/sckoc
+%{_mandir}/man1/sckoc.1*
 %{_prefix}/lib/modules-load.d/sckoc.conf
 %ghost %{_sysconfdir}/modules-load.d/sckoc-amd.conf
 
 %changelog
+* Fri Jul 10 2026 SkyWalkerAMD <scka7t@gmail.com> - 2.0.0-3
+- add sckoc(1) man page
+- add SPDX license identifiers to all source files
+
 * Thu Jul 09 2026 SkyWalkerAMD <scka7t@gmail.com> - 2.0.0-2
 - fix: /usr/bin/sckoc was the compiled readoc ELF, not the monitor script
   (the build step compiled readoc.c to a file literally named 'sckoc',

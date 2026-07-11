@@ -1,4 +1,5 @@
 #!/bin/sh
+# SPDX-License-Identifier: GPL-2.0-only
 # sckoc repository setup - adds the right repo for your distro,
 # then you can use the normal 'dnf install sckoc' or 'apt install sckoc'.
 # Usage:  curl -fsSL https://skywalkeramd.github.io/sckoc/apt/setup.sh | sudo bash

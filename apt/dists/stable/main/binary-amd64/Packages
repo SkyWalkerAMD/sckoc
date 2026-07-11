@@ -1,14 +1,14 @@
 Package: sckoc
-Version: 2.1.0-1
+Version: 2.1.1-1
 Architecture: amd64
 Maintainer: SkyWalkerAMD <scka7t@gmail.com>
 Depends: kmod
 Recommends: dmidecode
-Filename: pool/sckoc_2.1.0-1_amd64.deb
-Size: 31968
-MD5sum: 3cc8512d9657f544480cacab0c294b58
-SHA1: deee2e8ea45038e8dd5471164d01acda5d529a8e
-SHA256: de58f77eb2f92d606be566326ff1a03b460f2af2d143232abfa9500c8a849a9b
+Filename: pool/sckoc_2.1.1-1_amd64.deb
+Size: 31964
+MD5sum: 28084c04c5b7fecec3dbdb092db120bc
+SHA1: ccd492dce7f3ed9f572c27f82435fbe0a6488bca
+SHA256: 30d6452390fe58482669cd70a803a07b662b4fbeb2ee4a186546016e2fe3b660
 Section: utils
 Priority: optional
 Homepage: https://github.com/SkyWalkerAMD/sckoc

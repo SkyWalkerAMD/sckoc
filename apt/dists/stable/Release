@@ -1,18 +1,18 @@
 Architectures: amd64
 Codename: stable
 Components: main
-Date: Sat, 11 Jul 2026 05:09:28 +0000
+Date: Sat, 11 Jul 2026 06:06:21 +0000
 Origin: sckoc
 Suite: stable
 MD5Sum:
- 314d36f8b5745e620da1637267c5dbc2              701 main/binary-amd64/Packages
- 7fed16043490dfa031918f55a636583a              522 main/binary-amd64/Packages.gz
+ e9aca3a44c17fe1a87fff396d3fe746a              701 main/binary-amd64/Packages
+ 7ea5161e890207964188b58fd09359d3              521 main/binary-amd64/Packages.gz
 SHA1:
- 24839334b8b3060e990d5c4a3ce966b35ebe12dd              701 main/binary-amd64/Packages
- ab0f3c7418f0b7ec16099d8e94f8ad25337fc9cf              522 main/binary-amd64/Packages.gz
+ 677cac1af70cd492134503feafe3946973035e0d              701 main/binary-amd64/Packages
+ 588a520a355234eb440e1f18c561ab4a93d47322              521 main/binary-amd64/Packages.gz
 SHA256:
- b54851e1591660829cd6ce8708cc61d7bf9d1bbf4893f4e451e807c429d9465c              701 main/binary-amd64/Packages
- 3f23bbdd3d3acb074c2574859c1b317f3e4cc68c4a8c783b7278572684189056              522 main/binary-amd64/Packages.gz
+ 5f4977e366685fd012c21be97abe1bfa598aeb5340d87b8cbd0a23906075bab4              701 main/binary-amd64/Packages
+ c97840fc69a4b4f90564bbbf4e717332b3490b0129dcae8cf7e4d409d48d8492              521 main/binary-amd64/Packages.gz
 SHA512:
- 81e42abd7f9b6c28415ec096c6b90968902005189b660aaacf7c8644903eb2213e8477c9f14e5eada21c5eed8abdfc763272afc89aad88bedec9ca3ec59d84c1              701 main/binary-amd64/Packages
- 927cdf2140da51831f0a42fa35c63b0f4b85951110fa49a5406ad64104c002d42b046d69ee2256bb1b66c60063c7bab24d2b84d9f43b38b67e92374a6f4535dc              522 main/binary-amd64/Packages.gz
+ 76496c127f3b0f31080ea5328bc49312f592a57b2b822f6a42f41dc1cbff03ca197339482c8bcb27388095ea56afe2c44183ac2c7b5d4a2b91315d12b6161511              701 main/binary-amd64/Packages
+ c8f5d343e5f8f87b8c094d5a68145c309af083c6ad1529f8f8f020ab741316757a413a07acba66f90df7a8543a82233dcefcee2ec9ee063bedd289d0cd8b2b6d              521 main/binary-amd64/Packages.gz

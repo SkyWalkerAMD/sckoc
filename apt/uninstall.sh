@@ -1,4 +1,5 @@
 #!/bin/bash
+# SPDX-License-Identifier: GPL-2.0-only
 # uninstall.sh: remove sckoc completely (script-, rpm- or deb-installed)
 # usage: sudo bash uninstall.sh [--purge-deps]
 set -e

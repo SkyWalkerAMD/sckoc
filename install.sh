@@ -25,7 +25,7 @@ cat > "$T/version.h" <<'VER_H'
 /* SPDX-License-Identifier: GPL-2.0-only */
 #ifndef SCKOC_VERSION_H
 #define SCKOC_VERSION_H
-#define VERSION_STRING "2.1.0"
+#define VERSION_STRING "2.1.1"
 #endif
 VER_H
 cat > "$T/readoc.c" <<'READOC_C'
@@ -373,7 +373,7 @@ cat > /usr/local/bin/sckoc <<'MSR_SH'
 #!/bin/bash
 # SPDX-License-Identifier: GPL-2.0-only
 # sckoc: Intel/AMD read-only hardware monitor (no writes)
-MSRVER=2.1.0
+MSRVER=2.1.1
 set -e
 LIBEXEC=/usr/libexec/sckoc
 READOC="${READOC:-$( [ -x "$LIBEXEC/readoc" ] && echo "$LIBEXEC/readoc" || command -v readoc || echo /usr/local/bin/readoc )}"

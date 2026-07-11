@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: GPL-2.0-only
 Name:           sckoc
-Version:        2.1.0
+Version:        2.1.1
 Release:        %autorelease
 Summary:        Read-only hardware monitor for Intel and AMD servers
 

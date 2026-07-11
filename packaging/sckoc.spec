@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: GPL-2.0-only
 Name:           sckoc
 Version:        2.1.0
 Release:        1%{?dist}

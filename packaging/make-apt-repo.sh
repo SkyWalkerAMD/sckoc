@@ -1,4 +1,5 @@
 #!/bin/bash
+# SPDX-License-Identifier: GPL-2.0-only
 # build a flat apt repo under ./apt-repo from *.deb in cwd
 set -e
 mkdir -p apt-repo/pool apt-repo/dists/stable/main/binary-amd64

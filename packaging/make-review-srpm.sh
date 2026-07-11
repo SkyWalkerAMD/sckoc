@@ -1,4 +1,5 @@
 #!/bin/bash
+# SPDX-License-Identifier: GPL-2.0-only
 # make-review-srpm.sh — regenerate the Fedora-review SRPM (+ matching
 # sckoc.spec copy) for a released tag, inside a Fedora container.
 #

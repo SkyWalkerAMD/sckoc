@@ -1,4 +1,5 @@
 #!/bin/bash
+# SPDX-License-Identifier: GPL-2.0-only
 # fetch-el10.sh — download the newest sckoc el10 rpm from COPR into the
 # current directory (el10 is the one chroot the GitHub Actions release
 # workflow does not build, so its Release asset is fetched from COPR).

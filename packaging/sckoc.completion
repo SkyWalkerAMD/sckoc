@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: GPL-2.0-only
 # bash completion for sckoc
 _sckoc(){
   local cur prev words cword

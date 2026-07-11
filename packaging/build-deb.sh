@@ -1,4 +1,5 @@
 #!/bin/bash
+# SPDX-License-Identifier: GPL-2.0-only
 # build sckoc .deb — run from repo root: bash packaging/build-deb.sh
 set -e
 V=2.1.0; R=1; A=$(dpkg --print-architecture 2>/dev/null || echo amd64)

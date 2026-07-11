@@ -1,4 +1,5 @@
 #!/bin/bash
+# SPDX-License-Identifier: GPL-2.0-only
 # make-srpm.sh - fetch a released tag from GitHub and build its SRPM for COPR.
 # Works on any RPM distro (Rocky/RHEL/Fedora/AlmaLinux) with rpm-build installed.
 #

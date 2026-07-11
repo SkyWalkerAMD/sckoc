@@ -5,10 +5,10 @@ Maintainer: SkyWalkerAMD <scka7t@gmail.com>
 Depends: kmod
 Recommends: dmidecode
 Filename: pool/sckoc_2.1.0-1_amd64.deb
-Size: 31976
-MD5sum: 2a6d982d23223c8c07fbc226e84e4f74
-SHA1: a6fe3a27c99bd56c43c3c278f0d1ed0794a8bc3a
-SHA256: 5011f90aabfe68561dc576f1ed30bc8cddb254e051c8c0f6de2e48ab5fa6f2e1
+Size: 31968
+MD5sum: 3cc8512d9657f544480cacab0c294b58
+SHA1: deee2e8ea45038e8dd5471164d01acda5d529a8e
+SHA256: de58f77eb2f92d606be566326ff1a03b460f2af2d143232abfa9500c8a849a9b
 Section: utils
 Priority: optional
 Homepage: https://github.com/SkyWalkerAMD/sckoc

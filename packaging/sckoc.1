@@ -104,6 +104,15 @@ predates the CPU family, the out-of-tree
 driver is used, when present, as a read-only fallback source for
 temperature, FCLK/MCLK, PPT and rail voltages; such values are marked
 .IR (smu) .
+On TPMI-era Xeon processors (Granite Rapids and later) running kernels
+without the
+.B intel-uncore-frequency-tpmi
+driver, mesh and IOD frequencies are read directly from the TPMI MMIO
+region by the bundled read-only
+.B tpmi-uncore
+helper; such values are marked
+.IR (tpmi) .
+This path requires kernel lockdown to be off.
 Loading these modules is left to the administrator; packaged installs
 autoload
 .B msr

@@ -6,10 +6,12 @@ D=$(mktemp -d)
 # helpers are compiled under their real names; /usr/bin/sckoc is the SCRIPT
 gcc -Wall -O2 -D_GNU_SOURCE -D_FILE_OFFSET_BITS=64 -I. readoc.c -o "$D/readoc"
 gcc -Wall -O2 -D_GNU_SOURCE -D_FILE_OFFSET_BITS=64 hsmp-msg.c -o "$D/hsmp-msg"
+gcc -Wall -O2 -D_GNU_SOURCE -D_FILE_OFFSET_BITS=64 tpmi-uncore.c -o "$D/tpmi-uncore"
 P="$D/pkg"
 install -D -m755 sckoc          "$P/usr/bin/sckoc"
 install -D -m755 "$D/readoc"    "$P/usr/libexec/sckoc/readoc"
 install -D -m755 "$D/hsmp-msg"  "$P/usr/libexec/sckoc/hsmp-msg"
+install -D -m755 "$D/tpmi-uncore" "$P/usr/libexec/sckoc/tpmi-uncore"
 install -D -m644 packaging/sckoc.completion "$P/usr/share/bash-completion/completions/sckoc"
 install -D -m644 packaging/sckoc.modules-load "$P/usr/lib/modules-load.d/sckoc.conf"
 install -D -m644 packaging/sckoc.1 "$P/usr/share/man/man1/sckoc.1"

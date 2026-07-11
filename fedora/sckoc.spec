@@ -43,6 +43,7 @@ is left to the administrator and is intentionally not done by this package.
 install -D -p -m0755 sckoc    %{buildroot}%{_bindir}/sckoc
 install -D -p -m0755 readoc   %{buildroot}%{_libexecdir}/%{name}/readoc
 install -D -p -m0755 hsmp-msg %{buildroot}%{_libexecdir}/%{name}/hsmp-msg
+install -D -p -m0755 tpmi-uncore %{buildroot}%{_libexecdir}/%{name}/tpmi-uncore
 install -D -p -m0644 packaging/sckoc.completion \
         %{buildroot}%{_datadir}/bash-completion/completions/sckoc
 install -D -p -m0644 packaging/sckoc.1 %{buildroot}%{_mandir}/man1/sckoc.1
@@ -55,6 +56,7 @@ bash -n %{buildroot}%{_bindir}/sckoc
 head -c2 %{buildroot}%{_bindir}/sckoc | grep -q '#!'
 %{buildroot}%{_libexecdir}/%{name}/readoc -V
 test -x %{buildroot}%{_libexecdir}/%{name}/hsmp-msg
+test -x %{buildroot}%{_libexecdir}/%{name}/tpmi-uncore
 
 %files
 %license COPYING

@@ -1,5 +1,5 @@
 .\" SPDX-License-Identifier: GPL-2.0-only
-.TH SCKOC 1 "July 2026" "sckoc 2.1.1" "User Commands"
+.TH SCKOC 1 "July 2026" "sckoc 2.2.0" "User Commands"
 .SH NAME
 sckoc \- read-only MSR/HSMP hardware monitor for Intel and AMD systems
 .SH SYNOPSIS
@@ -7,6 +7,8 @@ sckoc \- read-only MSR/HSMP hardware monitor for Intel and AMD systems
 .RI [ mon ]
 .br
 .B sckoc vcore
+.br
+.B sckoc uncore
 .br
 .B sckoc dump
 .I reg
@@ -45,7 +47,16 @@ for a continuously refreshing display.
 .TP
 .B vcore
 Print per-core (or per-rail, where a board Super I/O sensor driver is
-available) core voltage.
+available) core voltage. On Intel this is the VID request read from MSR
+0x198 (the regulator target; load-line droop is not included), not a
+measured voltage.
+.TP
+.B uncore
+Print per-domain uncore (mesh) frequency limits in MHz. Where the
+intel-uncore-frequency sysfs driver is available this includes the BIOS
+boot values (initial_*_freq_khz); a mismatch against the current Min/Max
+limits is flagged with an asterisk, revealing limits changed at runtime.
+The MSR and TPMI fallback paths expose no boot values. Intel only.
 .TP
 .B dump \fIreg\fR [\fIhi:lo\fR]
 Read MSR

@@ -11,7 +11,7 @@ _sckoc(){
   local cmd=${words[1]:-}
 
   if [ "$cword" -eq 1 ]; then
-    COMPREPLY=($(compgen -W "mon vcore dump uninstall version help -V -h --help" -- "$cur"))
+    COMPREPLY=($(compgen -W "mon vcore uncore dump uninstall version help -V -h --help" -- "$cur"))
     return
   fi
 

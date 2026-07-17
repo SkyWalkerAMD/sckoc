@@ -4,7 +4,7 @@
 # Works on any RPM distro (Rocky/RHEL/Fedora/AlmaLinux) with rpm-build installed.
 #
 # Usage:
-#   ./make-srpm.sh 2.1.1
+#   ./make-srpm.sh 2.2.0
 #   ./make-srpm.sh            # defaults to the latest tag (GitHub API, jsDelivr fallback)
 #
 # After it finishes, upload the printed .src.rpm to COPR:
@@ -30,7 +30,7 @@ if [ -z "$VER" ]; then
         VER=$(curl -fsSL --retry 2 "https://data.jsdelivr.com/v1/packages/gh/$REPO/resolved" 2>/dev/null \
               | grep -oE '"version": *"[^"]+"' | head -1 | sed -E 's/.*"([^"]+)"$/\1/') || true
     fi
-    [ -n "$VER" ] || { echo "could not determine latest tag; pass it explicitly: $0 2.1.1"; exit 1; }
+    [ -n "$VER" ] || { echo "could not determine latest tag; pass it explicitly: $0 2.2.0"; exit 1; }
     echo "== latest tag is $VER =="
 fi
 

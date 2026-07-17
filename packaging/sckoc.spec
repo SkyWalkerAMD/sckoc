@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: GPL-2.0-only
 Name:           sckoc
-Version:        2.2.0
+Version:        2.2.1
 Release:        1%{?dist}
 Summary:        Read-only hardware monitor for Intel/AMD servers
 License:        GPL-2.0-only
@@ -75,6 +75,12 @@ if [ "$1" = 0 ]; then rm -f /etc/modules-load.d/sckoc-amd.conf; fi
 %ghost %{_sysconfdir}/modules-load.d/sckoc-amd.conf
 
 %changelog
+* Fri Jul 17 2026 SkyWalkerAMD <scka7t@gmail.com> - 2.2.1-1
+- drop obsolete pre-rename file names from the install/uninstall paths;
+  rdmsr is no longer removed, so a co-installed msr-tools stays intact
+- remove the retired packaging/fetch-el10.sh helper (the release workflow
+  builds el10 in a Rocky Linux 10 container)
+
 * Fri Jul 17 2026 SkyWalkerAMD <scka7t@gmail.com> - 2.2.0-1
 - new 'sckoc uncore' subcommand: per-domain uncore/mesh frequency limits,
   on sysfs incl. BIOS boot values (initial_*_freq_khz) with runtime-change flag

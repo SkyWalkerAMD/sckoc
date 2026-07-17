@@ -19,8 +19,7 @@ fi
 
 # 2) script installs + legacy names
 echo "== removing files =="
-rm -f /usr/local/bin/sckoc /usr/local/bin/readoc /usr/local/bin/rdmsr /usr/local/bin/hsmp-msg /usr/local/bin/tpmi-uncore \
-      /usr/local/bin/msr /usr/local/bin/msr-w890e /usr/local/bin/msr-tr /usr/local/bin/hsmp-fclk \
+rm -f /usr/local/bin/sckoc /usr/local/bin/readoc /usr/local/bin/hsmp-msg /usr/local/bin/tpmi-uncore \
       /etc/bash_completion.d/sckoc
 
 # 3) module autoload config + unload (safe if other tools use msr: they can modprobe again)
@@ -65,7 +64,6 @@ fi
 # 6) verify
 LEFT=""
 for f in /usr/local/bin/sckoc /usr/local/bin/readoc /usr/local/bin/hsmp-msg /usr/local/bin/tpmi-uncore \
-         /usr/local/bin/rdmsr /usr/local/bin/msr /usr/local/bin/msr-w890e /usr/local/bin/msr-tr /usr/local/bin/hsmp-fclk \
          /usr/bin/sckoc /usr/libexec/sckoc \
          /etc/bash_completion.d/sckoc \
          /etc/modules-load.d/msr.conf /etc/modules-load.d/sckoc.conf \

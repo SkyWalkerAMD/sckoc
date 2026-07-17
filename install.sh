@@ -4,10 +4,9 @@
 set -e
 [ "$(id -u)" = 0 ] || { echo "run as root / sudo"; exit 1; }
 
-OLD=$( { /usr/local/bin/sckoc -V 2>/dev/null || /usr/local/bin/msr -V 2>/dev/null; } | grep -E "^(msr|sckoc)" || true)
+OLD=$(/usr/local/bin/sckoc -V 2>/dev/null || true)
 [ -n "$OLD" ] && echo "== old version detected: $OLD, upgrading =="
-rm -f /usr/local/bin/sckoc /usr/local/bin/readoc /usr/local/bin/msr /usr/local/bin/msr-w890e /usr/local/bin/msr-tr \
-      /usr/local/bin/hsmp-fclk /usr/local/bin/hsmp-msg /usr/local/bin/tpmi-uncore \
+rm -f /usr/local/bin/sckoc /usr/local/bin/readoc /usr/local/bin/hsmp-msg /usr/local/bin/tpmi-uncore \
       /etc/bash_completion.d/sckoc
 
 command -v gcc >/dev/null || {
@@ -25,7 +24,7 @@ cat > "$T/version.h" <<'VER_H'
 /* SPDX-License-Identifier: GPL-2.0-only */
 #ifndef SCKOC_VERSION_H
 #define SCKOC_VERSION_H
-#define VERSION_STRING "2.2.0"
+#define VERSION_STRING "2.2.1"
 #endif
 VER_H
 cat > "$T/readoc.c" <<'READOC_C'
@@ -373,7 +372,7 @@ cat > /usr/local/bin/sckoc <<'MSR_SH'
 #!/bin/bash
 # SPDX-License-Identifier: GPL-2.0-only
 # sckoc: Intel/AMD read-only hardware monitor (no writes)
-MSRVER=2.2.0
+MSRVER=2.2.1
 set -e
 LIBEXEC=/usr/libexec/sckoc
 READOC="${READOC:-$( [ -x "$LIBEXEC/readoc" ] && echo "$LIBEXEC/readoc" || command -v readoc || echo /usr/local/bin/readoc )}"
@@ -457,7 +456,6 @@ case "${1:-}" in
       { command -v apt-get >/dev/null && apt-get -y remove sckoc; } || dpkg -r sckoc
     fi
     rm -f /usr/local/bin/sckoc /usr/local/bin/readoc /usr/local/bin/hsmp-msg /usr/local/bin/tpmi-uncore \
-          /usr/local/bin/msr /usr/local/bin/msr-w890e /usr/local/bin/msr-tr /usr/local/bin/hsmp-fclk \
           /etc/bash_completion.d/sckoc \
           /etc/modules-load.d/msr.conf /etc/modules-load.d/sckoc.conf /etc/modules-load.d/sckoc-amd.conf /etc/modules-load.d/sckoc-sensors.conf /usr/lib/modules-load.d/sckoc.conf \
           /etc/apt/sources.list.d/sckoc.list

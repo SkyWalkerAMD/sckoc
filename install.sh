@@ -25,7 +25,7 @@ cat > "$T/version.h" <<'VER_H'
 /* SPDX-License-Identifier: GPL-2.0-only */
 #ifndef SCKOC_VERSION_H
 #define SCKOC_VERSION_H
-#define VERSION_STRING "2.1.1"
+#define VERSION_STRING "2.2.0"
 #endif
 VER_H
 cat > "$T/readoc.c" <<'READOC_C'
@@ -373,7 +373,7 @@ cat > /usr/local/bin/sckoc <<'MSR_SH'
 #!/bin/bash
 # SPDX-License-Identifier: GPL-2.0-only
 # sckoc: Intel/AMD read-only hardware monitor (no writes)
-MSRVER=2.1.1
+MSRVER=2.2.0
 set -e
 LIBEXEC=/usr/libexec/sckoc
 READOC="${READOC:-$( [ -x "$LIBEXEC/readoc" ] && echo "$LIBEXEC/readoc" || command -v readoc || echo /usr/local/bin/readoc )}"
@@ -409,6 +409,7 @@ sckoc $MSRVER - read-only MSR/HSMP hardware monitor for Intel & AMD
 USAGE:
   sckoc [mon]              full monitor panel (default when no argument)
   sckoc vcore             per-core / per-rail core voltage
+  sckoc uncore            uncore/mesh frequency limits incl. BIOS boot values (Intel)
   sckoc dump <reg> [hi:lo]  read an MSR on every socket, optional bitfield
   sckoc uninstall [-y]    remove sckoc (auto-detects script/rpm/deb install)
   sckoc version | -V      print version
@@ -423,7 +424,8 @@ EXAMPLES:
   sudo INT=2 sckoc                 # 2-second sampling window
   sudo watch -n 3 sckoc            # refresh every 3 s
   sudo sckoc vcore                 # core voltage per core / rail
-  sudo sckoc dump 0x198 47:32      # Intel Vcore field, all sockets
+  sudo sckoc uncore                # mesh/uncore limits + BIOS boot values
+  sudo sckoc dump 0x198 47:32      # Intel core VID field, all sockets
   sudo sckoc dump 0xC0010064       # AMD P-state 0 definition
   sudo sckoc uninstall -y          # remove without prompt
 
@@ -584,15 +586,13 @@ wt4(){ awk "BEGIN{printf \"%.4f\", $1}"; }
 
 UNC="${UNCSYS:-/sys/devices/system/cpu/intel_uncore_frequency}"
 intel_uncore(){
-  local d pk mesh="" iod="" lo="" hi="" tag=""
+  local d pk mesh="" iod="" tag=""
   [ -d "$UNC" ] || modprobe intel-uncore-frequency-tpmi 2>/dev/null || modprobe intel-uncore-frequency 2>/dev/null || true
   for d in "$UNC"/uncore* "$UNC"/package_0"$1"_die_*; do
     [ -e "$d/current_freq_khz" ] || continue
     pk=$(cat "$d/package_id" 2>/dev/null || echo "$1")
     [ "$pk" = "$1" ] || continue
     if [ -z "$mesh" ]; then mesh=$(( $(cat "$d/current_freq_khz") / 1000 ))
-      lo=$(( $(cat "$d/min_freq_khz" 2>/dev/null || echo 0) / 1000 ))
-      hi=$(( $(cat "$d/max_freq_khz" 2>/dev/null || echo 0) / 1000 ))
     else iod="$iod $(( $(cat "$d/current_freq_khz") / 1000 ))"; fi
   done
   if [ -z "$mesh" ]; then
@@ -600,8 +600,6 @@ intel_uncore(){
     local v621 cur
     if v621=$("$READOC" -p "$2" -u 0x621 2>/dev/null) && cur=$(( (v621 & 127) * 100 )) && [ "$cur" -gt 0 ]; then
       mesh=$cur
-      lo=$(( $(bits "$(rf "$2" 0x620)" 8 7) * 100 ))
-      hi=$(( $(bits "$(rf "$2" 0x620)" 0 7) * 100 ))
     fi
   fi
   if [ -z "$mesh" ]; then
@@ -614,7 +612,7 @@ intel_uncore(){
       tl=$("$tp" 2>/dev/null | awk -v s="$1" '$1==s{print $2,$3,$4}')
       while read -r tc tn tx; do
         [ -n "$tc" ] || continue
-        if [ -z "$mesh" ]; then mesh=$tc; lo=$tn; hi=$tx; else iod="$iod $tc"; fi
+        if [ -z "$mesh" ]; then mesh=$tc; else iod="$iod $tc"; fi
       done <<< "$tl"
       [ -n "$mesh" ] && tag=" (tpmi)"
     fi
@@ -627,10 +625,90 @@ intel_uncore(){
       3) m0="Mesh0"; it="  Mesh1 $1 MHz  IOD-S $2 MHz  IOD-N $3 MHz" ;;
       *) it="  IOD $(echo $iod | tr " " "/") MHz" ;;
     esac
-    printf "%s %s MHz (Min %s, Max %s)%s%s" "$m0" "$mesh" "$lo" "$hi" "$it" "$tag"
+    printf "%s %s MHz%s%s" "$m0" "$mesh" "$it" "$tag"
   else
     printf "Mesh N/A (need intel-uncore-frequency driver, or tpmi-uncore helper on pre-6.5 kernels)"
   fi
+}
+
+# `sckoc uncore`: per-domain uncore/mesh frequency limits, including the BIOS
+# boot values. Min/Max are runtime-programmable (sysfs, wrmsr, intel-speed-
+# select tooling); sysfs initial_*_freq_khz preserves what firmware wrote at
+# boot, so a mismatch means the limits were changed after boot. The MSR and
+# TPMI fallback paths carry no boot values (a single register, overwritten in
+# place) - those columns show "-" there.
+uncore_cmd(){
+  [ "$VEN" = GenuineIntel ] || { echo "uncore: Intel-only (AMD fabric clock appears in the monitor as FCLK)"; exit 1; }
+  [ -d "$UNC" ] || modprobe intel-uncore-frequency-tpmi 2>/dev/null || modprobe intel-uncore-frequency 2>/dev/null || true
+  k2m(){ local v; if v=$(cat "$1" 2>/dev/null) && [ -n "$v" ]; then echo $((v/1000)); else echo "-"; fi; }
+  local shown="" chg="" d n pk cur mn mx imn imx star v621 v620 s c out tp
+  if [ -d "$UNC" ]; then
+    for d in "$UNC"/uncore* "$UNC"/package_*_die_*; do
+      [ -e "$d/min_freq_khz" ] || continue
+      [ -n "$shown" ] || { echo "== Uncore/mesh frequency limits, MHz (sysfs) =="
+        printf "  %-19s %-4s %-8s %-6s %-6s %-9s %-9s\n" Domain Pkg Current Min Max BIOS-Min BIOS-Max; }
+      n=${d##*/}
+      if ! pk=$(cat "$d/package_id" 2>/dev/null); then
+        case $n in package_*) pk=${n#package_}; pk=$((10#${pk%%_*})) ;; *) pk="?" ;; esac
+      fi
+      cur=$(k2m "$d/current_freq_khz"); mn=$(k2m "$d/min_freq_khz"); mx=$(k2m "$d/max_freq_khz")
+      imn=$(k2m "$d/initial_min_freq_khz"); imx=$(k2m "$d/initial_max_freq_khz")
+      star=""
+      if [ "$imn" != "-" ] && { [ "$mn" != "$imn" ] || [ "$mx" != "$imx" ]; }; then star=" *"; chg=y; fi
+      printf "  %-19s %-4s %-8s %-6s %-6s %-9s %-9s%s\n" "$n" "$pk" "$cur" "$mn" "$mx" "$imn" "$imx" "$star"
+      shown=y
+    done
+    [ -n "$chg" ] && echo "  * Min/Max differ from the BIOS boot values (changed at runtime)"
+  fi
+  if [ -z "$shown" ]; then
+    # pre-TPMI Xeon fallback: MSR 0x621 current, 0x620 min/max limits
+    for s in $SOCKETS; do
+      c=${REP[$s]}
+      v621=$("$READOC" -p "$c" -u 0x621 2>/dev/null) || continue
+      cur=$(( (v621 & 127) * 100 )); [ "$cur" -gt 0 ] || continue
+      [ -n "$shown" ] || { echo "== Uncore/mesh frequency limits, MHz (MSR 0x620/0x621; no boot values via MSR) =="
+        printf "  %-7s %-8s %-6s %-6s %-9s %-9s\n" Socket Current Min Max BIOS-Min BIOS-Max; }
+      v620=$(rf "$c" 0x620)
+      printf "  S%-6s %-8s %-6s %-6s %-9s %-9s\n" "$s" "$cur" "$(( $(bits "$v620" 8 7) * 100 ))" "$(( $(bits "$v620" 0 7) * 100 ))" - -
+      shown=y
+    done
+  fi
+  if [ -z "$shown" ]; then
+    # TPMI-era Xeon on pre-6.5 kernels: read-only tpmi-uncore helper
+    tp="${TPMIU:-$( [ -x "$LIBEXEC/tpmi-uncore" ] && echo "$LIBEXEC/tpmi-uncore" || command -v tpmi-uncore || echo /usr/local/bin/tpmi-uncore )}"
+    if [ -x "$tp" ] && out=$("$tp" 2>/dev/null) && [ -n "$out" ]; then
+      echo "== Uncore/mesh frequency limits, MHz (TPMI MMIO; no boot values via TPMI) =="
+      printf "  %-7s %-8s %-6s %-6s %-9s %-9s\n" Pkg Current Min Max BIOS-Min BIOS-Max
+      while read -r pk cur mn mx; do
+        [ -n "$pk" ] || continue
+        printf "  S%-6s %-8s %-6s %-6s %-9s %-9s\n" "$pk" "$cur" "$mn" "$mx" - -
+      done <<< "$out"
+      shown=y
+    fi
+  fi
+  [ -n "$shown" ] || { echo "uncore: no data (need intel-uncore-frequency driver, readable MSR 0x620/0x621, or tpmi-uncore helper)"; exit 1; }
+}
+
+# CPU identification block shown above the per-core overview: marketing name,
+# core/thread topology per socket, family/model/stepping and microcode rev.
+cpu_model_block(){
+  local s c mn md st uc thr cor cc
+  echo "== CPU =="
+  for s in $SOCKETS; do
+    c=${REP[$s]}
+    mn=$(awk -F':[ \t]*' -v p="$c" '$1 ~ /^processor/{cur=$2+0} cur==p && $1 ~ /^model name/{print $2; exit}' /proc/cpuinfo)
+    md=$(awk -F':[ \t]*' -v p="$c" '$1 ~ /^processor/{cur=$2+0} cur==p && $1 ~ /^model[ \t]*$/{print $2; exit}' /proc/cpuinfo)
+    st=$(awk -F':[ \t]*' -v p="$c" '$1 ~ /^processor/{cur=$2+0} cur==p && $1 ~ /^stepping/{print $2; exit}' /proc/cpuinfo)
+    uc=$(awk -F':[ \t]*' -v p="$c" '$1 ~ /^processor/{cur=$2+0} cur==p && $1 ~ /^microcode/{print $2; exit}' /proc/cpuinfo)
+    thr=0; cor=0
+    for cc in $CPUS; do
+      [ "$(cat "$CPUROOT/cpu$cc/topology/physical_package_id" 2>/dev/null)" = "$s" ] || continue
+      thr=$((thr+1))
+      [ "$(siblings "$cc" | head -1)" = "$cc" ] && cor=$((cor+1))
+    done
+    printf "  S%s  %s  %sC/%sT  fam%s model %s stepping %s%s\n" \
+      "$s" "${mn:-unknown}" "$cor" "$thr" "$FAM" "${md:--}" "${st:--}" "${uc:+  ucode $uc}"
+  done
 }
 intel_sock(){
   local c=$2 v198 v19c v610 eu pu e1 e2 d1 d2 de dd tj base pl1 pl2 en thr
@@ -661,7 +739,7 @@ intel_sock(){
   done
   local un; un=$(intel_uncore "$1" "$c")
   thr=""; [ "$(bits "$v19c" 0 1)" = 1 ] && thr="  [THROTTLING!]"; [ -z "$thr" ] && [ "$(bits "$v19c" 1 1)" = 1 ] && thr="  [Throttle-Log]"
-  printf "  S%s  Vcore %s V  Temp Max %d°C (TjMax %d°C)%s\n" "$1" "$(wt4 "$(bits "$v198" 32 16)/8192")" "$mx" "$tj" "$thr"
+  printf "  S%s  VID %s V  Temp Max %d°C (TjMax %d°C)%s\n" "$1" "$(wt4 "$(bits "$v198" 32 16)/8192")" "$mx" "$tj" "$thr"
   printf "      Core %d00 MHz (Base %d00 MHz)  %s\n" "$(bits "$v198" 8 8)" "$base" "$un"
   printf "      DRAM %s\n" "$DRAMSPD"
   printf "      Pkg %s W  DRAM %s W%s\n" "$(wt "$de/2^$eu/$INT")" "$(wt "$dd/2^$eu/$INT")" "$pcs"
@@ -876,9 +954,10 @@ mon(){
   for s in $SOCKETS; do
     if [ "$VEN" = GenuineIntel ]; then intel_sock "$s" "${REP[$s]}"; else amd_sock "$s" "${REP[$s]}"; fi
   done
+  cpu_model_block
   echo "== Per-core Overview =="
   if [ "$VEN" = GenuineIntel ]; then
-    echo "  Core      Freq      Temp   Vcore        C0      C6"
+    echo "  Core      Freq      Temp   VID          C0      C6"
   else
     local hasccd=0 hf
     for hf in "${HWROOT:-/sys/class/hwmon}"/hwmon*/temp[0-9]*_label; do
@@ -897,12 +976,13 @@ mon(){
 
 case "${1:-mon}" in
   mon) mon ;;
+  uncore) uncore_cmd ;;
   dump) shift; for s in $SOCKETS; do
         printf "  S%s cpu%-3s = 0x%s\n" "$s" "${REP[$s]}" \
           "$("$READOC" -p "${REP[$s]}" ${2:+-f $2} -X "$1" 2>/dev/null)"; done ;;
   vcore)
     if [ "$VEN" = GenuineIntel ]; then
-      echo "== Per-core Vcore (0x198[47:32], 平台若为包级则各核相同) =="
+      echo "== Per-core VID (0x198[47:32] 请求电压/调节器目标值, 未含 loadline 掉压, 非实测; 包级平台各核相同) =="
       for c in $CPUS; do
         [ "$(siblings "$c" | head -1)" = "$c" ] || continue
         printf "  core%-3d %s V\n" "$c" "$(wt4 "$(bits "$(rf "$c" 0x198)" 32 16)/8192")"
@@ -947,6 +1027,7 @@ chmod 755 /usr/local/bin/sckoc /usr/local/bin/readoc /usr/local/bin/hsmp-msg /us
 
 mkdir -p /etc/bash_completion.d
 cat > /etc/bash_completion.d/sckoc <<'COMP_SH'
+# SPDX-License-Identifier: GPL-2.0-only
 # bash completion for sckoc
 _sckoc(){
   local cur prev words cword
@@ -959,7 +1040,7 @@ _sckoc(){
   local cmd=${words[1]:-}
 
   if [ "$cword" -eq 1 ]; then
-    COMPREPLY=($(compgen -W "mon vcore dump uninstall version help -V -h --help" -- "$cur"))
+    COMPREPLY=($(compgen -W "mon vcore uncore dump uninstall version help -V -h --help" -- "$cur"))
     return
   fi
 
@@ -1045,7 +1126,7 @@ for m in nct6775 asus_ec_sensors; do modprobe "$m" 2>/dev/null && SENS="$SENS $m
 [ -n "$SENS" ] && printf '%s\n' $SENS > /etc/modules-load.d/sckoc-sensors.conf || true
 
 echo "== installed: $(/usr/local/bin/sckoc -V) @ $(awk '/vendor_id/{print $3;exit}' /proc/cpuinfo) =="
-echo "== usage: sckoc | sckoc dump <reg> [hi:lo] | sckoc vcore | sckoc -V | INT=<sec> sckoc =="
+echo "== usage: sckoc | sckoc dump <reg> [hi:lo] | sckoc vcore | sckoc uncore | sckoc -V | INT=<sec> sckoc =="
 echo "== tab completion installed (new shells; or: source /etc/bash_completion.d/sckoc) =="
 echo "== first run: =="
 /usr/local/bin/sckoc

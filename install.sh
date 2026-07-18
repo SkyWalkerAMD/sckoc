@@ -22,7 +22,7 @@ command -v dmidecode >/dev/null || {
 T=$(mktemp -d); trap 'rm -rf "$T"' EXIT
 cat > "$T/version.h" <<'VER_H'
 /* SPDX-License-Identifier: GPL-2.0-only */
-#define VERSION_STRING "2.6.0"
+#define VERSION_STRING "3.0.0"
 VER_H
 cat > "$T/readoc.c" <<'READOC_C'
 // SPDX-License-Identifier: GPL-2.0-only
@@ -468,7 +468,7 @@ cat > /usr/local/bin/sckoc <<'MSR_SH'
 #!/bin/bash
 # SPDX-License-Identifier: GPL-2.0-only
 # sckoc: Intel/AMD read-only hardware monitor (no writes)
-MSRVER=2.6.0
+MSRVER=3.0.0
 # No 'set -e': this is a read-only monitor built from many best-effort MSR
 # reads, and blocks use the `[ cond ] && action` idiom throughout (which
 # returns non-zero when the guard is false). Each block degrades on its own;
@@ -540,9 +540,11 @@ EXAMPLES:
   sudo sckoc                       # one-shot overview
   sudo INT=2 sckoc                 # 2-second sampling window
   sudo watch -n 3 sckoc            # refresh every 3 s
-  sudo sckoc info                  # platform config + power limits
+  sudo sckoc info                  # full static platform report
   sudo sckoc vid                   # per-core VID / rail voltage
   sudo sckoc uncore                # mesh/uncore limits + BIOS boot values
+  sudo sckoc --json                # monitor as JSON (schema sckoc-mon-v1)
+  sudo sckoc uncore --json         # uncore limits as JSON
   sudo sckoc dump 0x198 47:32      # Intel core VID field, all sockets
   sudo sckoc dump 0xC0010064       # AMD P-state 0 definition
   sudo sckoc uninstall -y          # remove without prompt
@@ -1482,8 +1484,8 @@ _sckoc(){
         # case-insensitive (both 0xc0010063 and 0xC0010063 complete)
         local ven intel amd regs w out=()
         ven=$(awk '/vendor_id/{print $3;exit}' /proc/cpuinfo 2>/dev/null)
-        intel="0x10 0xCE 0xE7 0xE8 0x194 0x198 0x19C 0x1A2 0x1AD 0x3F9 0x3FD 0x606 0x60D 0x610 0x611 0x619 0x620 0x621"
-        amd="0xC0010015 0xC0010063 0xC0010064 0xC0010299 0xC001029A 0xC001029B"
+        intel="0x10 0xCE 0xE7 0xE8 0x194 0x198 0x19C 0x1A2 0x1AD 0x1AE 0x3F9 0x3FD 0x606 0x60D 0x610 0x611 0x614 0x619 0x620 0x621"
+        amd="0xC0010015 0xC0010063 0xC0010064 0xC0010065 0xC0010066 0xC0010299 0xC001029A 0xC001029B"
         case "$ven" in
           GenuineIntel) regs=$intel ;;
           AuthenticAMD) regs=$amd ;;

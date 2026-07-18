@@ -2,9 +2,9 @@
 
 > 中文文档 / Chinese documentation: [README.md](README.md)
 
-A **read-only** hardware monitor for Intel and AMD servers and workstations. One command gives a complete three-level view (Platform, per-socket, per-core) covering voltage, temperature, frequency, power, C-state residency and platform security state. The tool is pure-read by design: it never writes a single MSR, so it works under Secure Boot and kernel lockdown (integrity mode).
+A **read-only** hardware monitor for Intel and AMD servers and workstations. A single `sckoc` command gives a live per-socket and per-core view covering voltage, temperature, frequency, power and C-state residency; `sckoc info` adds the full static platform report (security state, CPU ratio configuration, power limits, memory and cache). The tool is pure-read by design: it never writes a single MSR, so it works under Secure Boot and kernel lockdown (integrity mode).
 
-**Current version: 2.6.0**
+**Current version: 3.0.0**
 
 ## Design principles
 
@@ -75,11 +75,11 @@ Self-contained: installs dependencies (gcc, dmidecode), compiles the helpers, de
 
 ```bash
 # Fedora: pick the fcNN package matching your release (example: Fedora 44; use the actual filename from the Releases page)
-sudo dnf install -y https://github.com/SkyWalkerAMD/sckoc/releases/download/2.6.0/sckoc-2.6.0-1.fc44.x86_64.rpm
+sudo dnf install -y https://github.com/SkyWalkerAMD/sckoc/releases/download/3.0.0/sckoc-3.0.0-1.fc44.x86_64.rpm
 # Rocky / Alma / RHEL / CentOS Stream: pick the matching elN package (example: EL8); the COPR in option 3 is preferred as it matches your distro automatically
-sudo dnf install -y https://github.com/SkyWalkerAMD/sckoc/releases/download/2.6.0/sckoc-2.6.0-1.el8.x86_64.rpm
+sudo dnf install -y https://github.com/SkyWalkerAMD/sckoc/releases/download/3.0.0/sckoc-3.0.0-1.el8.x86_64.rpm
 # Ubuntu / Debian
-sudo apt install -y https://github.com/SkyWalkerAMD/sckoc/releases/download/2.6.0/sckoc_2.6.0-1_amd64.deb
+sudo apt install -y https://github.com/SkyWalkerAMD/sckoc/releases/download/3.0.0/sckoc_3.0.0-1_amd64.deb
 ```
 
 Note: RPM binaries are tied to the distro that built them (glibc and dependencies differ); fcNN packages do not install on RHEL-family systems and vice versa — pick the asset matching your distribution.
@@ -108,13 +108,13 @@ echo "deb [trusted=yes] https://skywalkeramd.github.io/sckoc/apt stable main" | 
 sudo apt update && sudo apt install sckoc
 ```
 
-Note: both COPR and the apt repo are third-party repositories — adding the source once is the distro's third-party trust mechanism; afterwards `dnf/apt install sckoc` and upgrades behave like any other package. Self-building: deb via `bash packaging/build-deb.sh` (run from the repo root); rpm by fetching the source tarball first: `spectool -g -R packaging/sckoc.spec && rpmbuild -ba packaging/sckoc.spec` (or download Source code (tar.gz) from Releases into `~/rpmbuild/SOURCES/sckoc-2.6.0.tar.gz`). Package installs auto-probe and load k10temp/HSMP modules on AMD but **never run DKMS builds**; platforms that need DKMS (TR PRO 9000WX) should use install.sh or configure it once by hand as described above.
+Note: both COPR and the apt repo are third-party repositories — adding the source once is the distro's third-party trust mechanism; afterwards `dnf/apt install sckoc` and upgrades behave like any other package. Self-building: deb via `bash packaging/build-deb.sh` (run from the repo root); rpm by fetching the source tarball first: `spectool -g -R packaging/sckoc.spec && rpmbuild -ba packaging/sckoc.spec` (or download Source code (tar.gz) from Releases into `~/rpmbuild/SOURCES/sckoc-3.0.0.tar.gz`). Package installs auto-probe and load k10temp/HSMP modules on AMD but **never run DKMS builds**; platforms that need DKMS (TR PRO 9000WX) should use install.sh or configure it once by hand as described above.
 
 ## Usage
 
 ```bash
 sudo sckoc                    # key live monitor (default: mon)
-sudo sckoc info               # platform config: security state + PL1/PL2
+sudo sckoc info               # static platform report: CPU/turbo/thermal/power/memory/cache
 sudo sckoc vid                # per-core VID / per-rail voltage
 sudo sckoc uncore             # uncore/mesh frequency limits + BIOS boot values (Intel)
 sudo sckoc --json             # machine-readable JSON (both mon and uncore take --json)
@@ -158,7 +158,7 @@ curl -fsSL https://cdn.jsdelivr.net/gh/SkyWalkerAMD/sckoc@main/uninstall.sh | su
 
 ## Requirements and permissions
 
-Needs root and the `msr` kernel module (handled by the installer; `sckoc uncore` works without the msr module when the intel-uncore-frequency sysfs driver is present). Mesh/IOD frequency needs the `intel-uncore-frequency(-tpmi)` driver (kernel 5.6+/6.5+, backported to RHEL 9). AMD FCLK/PPT etc. need `/dev/hsmp`: in-kernel `amd_hsmp` on EPYC (5.18+), DKMS `hsmp_acpi` on Threadripper PRO 9000WX (installer handles it), both requiring HSMP enabled in BIOS. AMD temperature needs k10temp; voltage rails and real Vcore need a board Super I/O driver (nct6775 etc., auto-probed by the installer). Everything except the DKMS cases works under Secure Boot + lockdown=integrity; DKMS modules need MOK signing under Secure Boot.
+Needs root and the `msr` kernel module (handled by the installer; `sckoc uncore` works without the msr module when the intel-uncore-frequency sysfs driver is present). Mesh/IOD frequency needs the `intel-uncore-frequency(-tpmi)` driver (kernel 5.6+/6.5+, backported to RHEL 9). AMD FCLK/PPT etc. need `/dev/hsmp`: in-kernel `amd_hsmp` on EPYC (5.18+), DKMS `hsmp_acpi` on Threadripper PRO 9000WX (installer handles it), both requiring HSMP enabled in BIOS. AMD temperature needs k10temp; voltage rails and real Vcore need a board Super I/O driver (nct6775 etc., auto-probed by the installer). Everything except the DKMS cases and the TPMI MMIO fallback path (see Intel platform notes) works under Secure Boot + lockdown=integrity; DKMS modules need MOK signing under Secure Boot.
 
 ## Project status
 

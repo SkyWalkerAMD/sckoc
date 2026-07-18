@@ -1,7 +1,7 @@
 #!/bin/bash
 # SPDX-License-Identifier: GPL-2.0-only
 # sckoc: Intel/AMD read-only hardware monitor (no writes)
-MSRVER=2.6.0
+MSRVER=3.0.0
 # No 'set -e': this is a read-only monitor built from many best-effort MSR
 # reads, and blocks use the `[ cond ] && action` idiom throughout (which
 # returns non-zero when the guard is false). Each block degrades on its own;
@@ -73,9 +73,11 @@ EXAMPLES:
   sudo sckoc                       # one-shot overview
   sudo INT=2 sckoc                 # 2-second sampling window
   sudo watch -n 3 sckoc            # refresh every 3 s
-  sudo sckoc info                  # platform config + power limits
+  sudo sckoc info                  # full static platform report
   sudo sckoc vid                   # per-core VID / rail voltage
   sudo sckoc uncore                # mesh/uncore limits + BIOS boot values
+  sudo sckoc --json                # monitor as JSON (schema sckoc-mon-v1)
+  sudo sckoc uncore --json         # uncore limits as JSON
   sudo sckoc dump 0x198 47:32      # Intel core VID field, all sockets
   sudo sckoc dump 0xC0010064       # AMD P-state 0 definition
   sudo sckoc uninstall -y          # remove without prompt

@@ -100,6 +100,8 @@ chk "mon offers --json" \
 echo "== t8 cpu model block =="
 chk "prints == CPU ==" \
   "bash -c 'CPUROOT=/sys/devices/system/cpu; FAM=\$(awk \"/cpu family/{print \\\$4;exit}\" /proc/cpuinfo); declare -A REP; for d in \"\$CPUROOT\"/cpu[0-9]*; do c=\${d##*cpu}; p=\$(cat \"\$d/topology/physical_package_id\" 2>/dev/null) || continue; [ -z \"\${REP[\$p]}\" ] && REP[\$p]=\$c; done; SOCKETS=\$(printf \"%s\\n\" \"\${!REP[@]}\" | sort -n); CPUS=\$(for d in \"\$CPUROOT\"/cpu[0-9]*; do echo \"\${d##*cpu}\"; done | sort -n); eval \"\$(awk \"/^siblings\\(\\)/,/^}/\" sckoc)\"; eval \"\$(awk \"/^cpu_model_block\\(\\)/,/^}/\" sckoc)\"; cpu_model_block' | grep -q '== CPU =='"
+chk "CPU line carries Base via BASEM" \
+  "bash -c 'CPUROOT=/sys/devices/system/cpu; FAM=\$(awk \"/cpu family/{print \\\$4;exit}\" /proc/cpuinfo); declare -A REP; for d in \"\$CPUROOT\"/cpu[0-9]*; do c=\${d##*cpu}; p=\$(cat \"\$d/topology/physical_package_id\" 2>/dev/null) || continue; [ -z \"\${REP[\$p]}\" ] && REP[\$p]=\$c; done; SOCKETS=\$(printf \"%s\\n\" \"\${!REP[@]}\" | sort -n); CPUS=\$(for d in \"\$CPUROOT\"/cpu[0-9]*; do echo \"\${d##*cpu}\"; done | sort -n); eval \"\$(awk \"/^siblings\\(\\)/,/^}/\" sckoc)\"; eval \"\$(awk \"/^cpu_model_block\\(\\)/,/^}/\" sckoc)\"; declare -A BASEM; for ss in \$SOCKETS; do BASEM[\$ss]=2500; done; cpu_model_block' | grep -q 'Base 2500 MHz'"
 
 echo "== t9 mon mesh line has no (Min =="
 chk "mesh line present" \
@@ -107,6 +109,123 @@ chk "mesh line present" \
 chk "mesh line has no (Min" \
   "! bash -c 'eval \"\$(awk \"/^intel_uncore\\(\\)/,/^}/\" sckoc)\"; UNC=$U LIBEXEC=/nonexistent READOC=/nonexistent intel_uncore 0 0' | grep -q '(Min'"
 
+
+echo "== t10 2.6.0: vid rename, info report, slim panel =="
+# per-purpose readoc fixtures: adjacent MSRs alias byte ranges in the file
+# emulation, so each check gets a file holding only the registers it reads.
+python3 - "$T" <<'PY10'
+import struct, sys
+d = sys.argv[1]
+def mk(p, regs):
+    b = bytearray(8192)
+    for r, v in regs.items(): b[r:r+8] = struct.pack('<Q', v)
+    open(p, 'wb').write(bytes(b))
+mk(d+'/vid0.msr',  {0x198: (9568 << 32) | (48 << 8)})   # VID 9568/8192 = 1.1680 V
+mk(d+'/info0.msr', {0x194: 1 << 20,                     # OC Lock Enabled
+                    0xCE: (25<<8)|(8<<40)|(8<<48)|(1<<28)|(1<<30),  # base25 eff8 min8, prog turbo+tjmax
+                    0x1A2: (97<<16)|(5<<24),            # TjMax 97, TCC offset 5
+                    0x1AD: 30|(30<<8)|(29<<16)|(29<<24),  # turbo bins 30/30/29/29
+                    0x606: (10 << 8) | 3,               # pu=3
+                    0x610: (1 << 47) | (2000 << 32) | (1 << 15) | 1000})  # PL1 125.0/PL2 250.0, both Enabled
+mk(d+'/pkg0.msr',  {0x606: 3, 0x614: 2800|(1600<<16)|(4000<<32)})  # TDP 350/Min 200/Max 500 W
+mk(d+'/turbo1.msr',{0x1AD: 48})                         # single turbo bin 48x (bare, no binN)
+mk(d+'/mon0.msr',  {0xCE: 25 << 8})                     # base ratio 25 -> 2500 MHz
+PY10
+mkdir -p "$T/sb2" "$T/topo/cpu0/topology"
+printf '\x00\x00\x00\x01' > "$T/sb2/SecureBoot-test"
+echo "none [integrity] confidentiality" > "$T/ld2"
+echo 0 > "$T/topo/cpu0/topology/core_cpus_list"; echo 0 > "$T/topo/cpu0/topology/physical_package_id"
+mkdir -p "$T/topo/cpu0/cache/index0" "$T/topo/cpu0/cache/index3"
+echo 1 > "$T/topo/cpu0/cache/index0/level"; echo Data > "$T/topo/cpu0/cache/index0/type"; echo 48K > "$T/topo/cpu0/cache/index0/size"
+echo 3 > "$T/topo/cpu0/cache/index3/level"; echo Unified > "$T/topo/cpu0/cache/index3/type"; echo 320M > "$T/topo/cpu0/cache/index3/size"
+# populated dmidecode: dram_speed/dram_detail must not abort the rest under any
+# guard-returns-nonzero path (regression: dmidecode WITH data used to kill mon)
+cat > "$T/fakedmi" <<'DMI'
+#!/bin/sh
+cat <<'OUT'
+Memory Device
+	Total Width: 80 bits
+	Size: 16 GB
+	Locator: CPU0_DIMM_A1
+	Bank Locator: NODE 0
+	Configured Memory Speed: 6400 MT/s
+	Configured Voltage: 1.1 V
+
+OUT
+DMI
+chmod +x "$T/fakedmi"
+
+bash sckoc help > "$T/help.out"
+chk "help lists vid"               "grep -q 'sckoc vid ' '$T/help.out'"
+chk "help lists info"              "grep -q 'sckoc info ' '$T/help.out'"
+chk "help uncore line has Min/Max" "grep -q 'Min/Max' '$T/help.out'"
+chk "help USAGE block has no vcore" "! sed -n '/^USAGE:/,/^ENVIRONMENT:/p' '$T/help.out' | grep -q vcore"
+chk "help notes deprecated alias"  "grep -q \"deprecated alias of 'vid'\" '$T/help.out'"
+if echo x | grep -qP 'x' 2>/dev/null; then
+  chk "sckoc CLI has no CJK text"  "! grep -qP '\p{Han}' sckoc"
+else
+  echo "  skip- CJK scan (grep -P unavailable)"
+fi
+
+bash -c 'source packaging/sckoc.completion; COMP_WORDS=(sckoc ""); COMP_CWORD=1; _sckoc; echo "${COMPREPLY[*]}"' > "$T/comp.out"
+chk "completion offers vid"        "grep -qw vid '$T/comp.out'"
+chk "completion offers info"       "grep -qw info '$T/comp.out'"
+chk "completion dropped vcore"     "! grep -qw vcore '$T/comp.out'"
+
+cat > "$T/vidh.sh" <<EOSH
+CPUROOT="$T/topo"; VEN=GenuineIntel; CPUS=0
+READOC="$T/readoc"; export READOC_DEV="$T/vid%d.msr"
+rf(){ "\$READOC" -p "\$1" -u "\$2" 2>/dev/null || echo 0; }
+bits(){ echo \$(( (\$1 >> \$2) & ((1 << \$3) - 1) )); }
+wt4(){ awk "BEGIN{printf \"%.4f\", \$1}"; }
+eval "\$(awk '/^siblings\(\)/,/^}/' sckoc)"
+eval "\$(awk '/^vid_cmd\(\)/,/^}/' sckoc)"
+vid_cmd
+EOSH
+chk "vid header: English, requested"  "bash '$T/vidh.sh' | grep -q 'requested voltage / regulator target'"
+chk "vid header: not measured"        "bash '$T/vidh.sh' | grep -q 'not measured'"
+chk "vid value decode"                "bash '$T/vidh.sh' | grep -q 'core0 *1\.1680 V'"
+
+I10="MSRVEN=GenuineIntel READOC=$T/readoc READOC_DEV=$T/info%d.msr SBDIR=$T/sb2 LDF=$T/ld2"
+chk "info platform line"  "env $I10 bash sckoc info | grep -q 'Secure Boot Enabled  Lockdown integrity  OC Lock Enabled'"
+chk "info CPU ratio ceilings" "env $I10 bash sckoc info | grep -q 'Base 25x (2500 MHz)  Max-Eff 8x  Min 8x'"
+chk "info programmable flags"  "env $I10 bash sckoc info | grep -q 'Programmable: turbo-ratio yes'"
+chk "info turbo ratio bins"    "env $I10 bash sckoc info | grep -q 'Turbo Ratio Limits' && env $I10 bash sckoc info | grep -q '30x'"
+ITB="MSRVEN=GenuineIntel READOC=$T/readoc READOC_DEV=$T/turbo1.msr SBDIR=$T/sb2 LDF=$T/ld2"
+chk "info single turbo bin bare" "env $ITB bash sckoc info | grep -qE '^ +48x$' && ! env $ITB bash sckoc info | grep -q 'bin0'"
+chk "info thermal TjMax"       "env $I10 bash sckoc info | grep -q 'TjMax 97' && env $I10 bash sckoc info | grep -q 'PROCHOT offset 5'"
+chk "info PL line + window"    "env $I10 bash sckoc info | grep -qE 'S0  PL1 125.0 W \(Enabled, [0-9.]+ s\)  PL2 250.0 W \(Enabled, [0-9.]+ s\)'"
+chk "info package envelope"    "env MSRVEN=GenuineIntel READOC=$T/readoc READOC_DEV=$T/pkg%d.msr SBDIR=$T/sb2 LDF=$T/ld2 bash sckoc info | grep -q 'Package: TDP 350.0 W  Min 200.0 W  Max 500.0 W'"
+chk "info cache topology"      "env MSRVEN=GenuineIntel CPUROOT=$T/topo READOC=$T/readoc READOC_DEV=$T/info%d.msr SBDIR=$T/sb2 LDF=$T/ld2 bash sckoc info | grep -q '== Cache' && env MSRVEN=GenuineIntel CPUROOT=$T/topo READOC=$T/readoc READOC_DEV=$T/info%d.msr SBDIR=$T/sb2 LDF=$T/ld2 bash sckoc info | grep -q 'L1d 48K'"
+IDMI="MSRVEN=GenuineIntel CPUROOT=$T/topo READOC=$T/readoc READOC_DEV=$T/info%d.msr SBDIR=$T/sb2 LDF=$T/ld2 DMI=$T/fakedmi"
+chk "info memory parsed"      "env $IDMI bash sckoc info | grep -qE 'CPU0_DIMM_A1.*6400 MT/s.*1.1 V.*16 GB'"
+chk "info populated memory keeps Cache" "env $IDMI bash sckoc info | grep -q '== Memory' && env $IDMI bash sckoc info | grep -q '== Cache'"
+chk "info without msr degrades" "env MSRVEN=GenuineIntel READOC=/nonexistent SBDIR=$T/sb2 LDF=$T/ld2 bash sckoc info | grep -q 'N/A (need msr module'"
+
+GATE2=""
+if [ ! -e /dev/cpu/0/msr ]; then
+  if [ "$(id -u)" = 0 ]; then mkdir -p /dev/cpu/0 && touch /dev/cpu/0/msr && GATE2=1; fi
+fi
+if [ -e /dev/cpu/0/msr ]; then
+  NC=$(nproc); for i in $(seq 0 $((NC-1))); do [ "$i" = 0 ] || cp "$T/mon0.msr" "$T/mon$i.msr"; done
+  M10="MSRVEN=GenuineIntel INT=1 READOC=$T/readoc READOC_DEV=$T/mon%d.msr DMI=/bin/false UNCSYS=$T/none TPMIU=/nonexistent"
+  env $M10 bash sckoc > "$T/mon.out" 2>/dev/null || true
+  chk "mon: Platform line moved out"   "! grep -q '== Platform ==' '$T/mon.out'"
+  chk "mon: PL1/PL2 moved out"         "! grep -q 'PL1 ' '$T/mon.out'"
+  chk "mon: per-socket rows present"   "grep -q 'Per-socket Overview' '$T/mon.out'"
+  chk "mon: Base moved to CPU block"   "grep -q 'Base 2500 MHz' '$T/mon.out' && ! grep -q '(Base' '$T/mon.out'"
+  env $M10 DMI=$T/fakedmi bash sckoc > "$T/monp.out" 2>/dev/null || true
+  chk "mon survives populated dmidecode" "grep -q 'Per-socket Overview' '$T/monp.out'"
+  V10="MSRVEN=GenuineIntel READOC=$T/readoc READOC_DEV=$T/vid%d.msr"
+  env $V10 bash sckoc vcore > "$T/vc.out" 2> "$T/vc.err" || true
+  chk "vcore alias: stderr notice"     "grep -q \"use 'sckoc vid'\" '$T/vc.err'"
+  chk "vcore alias: still functional"  "grep -q 'Per-core VID' '$T/vc.out'"
+  env $V10 bash sckoc vid > /dev/null 2> "$T/v2.err" || true
+  chk "vid: no deprecation on stderr"  "! grep -q vid '$T/v2.err'"
+else
+  echo "  skip- mon layout / vcore alias (no /dev/cpu/0/msr and not root)"
+fi
+[ -n "$GATE2" ] && rm -rf /dev/cpu
 echo
 echo "== result: $PASS passed, $FAIL failed =="
 [ "$FAIL" = 0 ]

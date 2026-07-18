@@ -110,7 +110,7 @@ chk "mesh line has no (Min" \
   "! bash -c 'eval \"\$(awk \"/^intel_uncore\\(\\)/,/^}/\" sckoc)\"; UNC=$U LIBEXEC=/nonexistent READOC=/nonexistent intel_uncore 0 0' | grep -q '(Min'"
 
 
-echo "== t10 2.6.0: vid rename, info report, slim panel =="
+echo "== t10 3.0.0: vid rename, info report, slim panel =="
 # per-purpose readoc fixtures: adjacent MSRs alias byte ranges in the file
 # emulation, so each check gets a file holding only the registers it reads.
 python3 - "$T" <<'PY10'

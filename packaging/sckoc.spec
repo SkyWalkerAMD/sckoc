@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: GPL-2.0-only
 Name:           sckoc
-Version:        2.6.0
+Version:        3.0.0
 Release:        1%{?dist}
 Summary:        Read-only hardware monitor for Intel/AMD servers
 License:        GPL-2.0-only
@@ -75,6 +75,15 @@ if [ "$1" = 0 ]; then rm -f /etc/modules-load.d/sckoc-amd.conf; fi
 %ghost %{_sysconfdir}/modules-load.d/sckoc-amd.conf
 
 %changelog
+* Sun Jul 19 2026 SkyWalkerAMD <scka7t@gmail.com> - 3.0.0-1
+- completion: the dump register table catches up with the 2.6.0 decoders
+  (Intel 0x1AE turbo core-count thresholds and 0x614 PKG_POWER_INFO; AMD
+  P1/P2 at 0xC0010065/0xC0010066)
+- info: a single populated turbo bin prints its ratio bare (48x), the
+  binN / <=NC labels only appear with multiple bins
+- help: --json invocation examples; README and man aligned with the full
+  static platform report wording
+
 * Sun Jul 19 2026 SkyWalkerAMD <scka7t@gmail.com> - 2.6.0-1
 - info: grow into a full static platform report - CPU identity with the
   configured ratio ceilings (base/max-efficiency/min) and programmable

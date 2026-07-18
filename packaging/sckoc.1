@@ -1,5 +1,5 @@
 .\" SPDX-License-Identifier: GPL-2.0-only
-.TH SCKOC 1 "July 2026" "sckoc 2.6.0" "User Commands"
+.TH SCKOC 1 "July 2026" "sckoc 3.0.0" "User Commands"
 .SH NAME
 sckoc \- read-only MSR/HSMP hardware monitor for Intel and AMD systems
 .SH SYNOPSIS
@@ -31,8 +31,8 @@ sckoc \- read-only MSR/HSMP hardware monitor for Intel and AMD systems
 is a read-only hardware monitor for Intel and AMD servers and workstations.
 The monitor panel reports key live data: per-socket and per-core voltage,
 temperature, frequency (core, mesh, IOD and DRAM), power and C-state
-residency. Static platform configuration (security state, PL1/PL2 power
-limits) and per-topic detail are reported by the
+residency. The full static platform report and per-topic voltage and
+uncore detail are provided by the
 .BR info ,
 .B vid
 and
@@ -205,7 +205,7 @@ Two-second sampling window:
 Refresh every 3 seconds:
 .B sudo watch \-n 3 sckoc
 .TP
-Platform configuration and power limits:
+The static platform report:
 .B sudo sckoc info
 .TP
 Per-core VID / rail voltage:

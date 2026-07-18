@@ -1,0 +1,196 @@
+.\" SPDX-License-Identifier: GPL-2.0-only
+.TH SCKOC 1 "July 2026" "sckoc 2.3.0" "User Commands"
+.SH NAME
+sckoc \- read-only MSR/HSMP hardware monitor for Intel and AMD systems
+.SH SYNOPSIS
+.B sckoc
+.RI [ mon ]
+.RB [ \-\-json ]
+.br
+.B sckoc vcore
+.br
+.B sckoc uncore
+.RB [ \-\-json ]
+.br
+.B sckoc dump
+.I reg
+.RI [ hi:lo ]
+.br
+.B sckoc uninstall
+.RB [ \-y ]
+.br
+.B sckoc
+.BR version | \-V
+.br
+.B sckoc
+.BR help | \-h
+.SH DESCRIPTION
+.B sckoc
+is a read-only hardware monitor for Intel and AMD servers and workstations.
+It reports per-socket and per-core voltage, temperature, frequency (core,
+mesh, IOD and DRAM), power (RAPL, PL1/PL2, PPT), C-state residency and
+platform security state.
+.PP
+Readings are taken from Model-Specific Registers through
+.I /dev/cpu/*/msr
+and, on AMD, from the Host System Management Port through
+.IR /dev/hsmp .
+The tool only ever reads \(em it never writes to an MSR \(em so it is safe
+to use under Secure Boot and kernel lockdown (integrity mode).
+.PP
+Root privileges are required.
+.SH COMMANDS
+.TP
+.RI [ mon ]
+Print the full monitor panel once. This is the default when no argument is
+given. Combine with
+.BR watch (1)
+for a continuously refreshing display.
+With
+.B \-\-json
+the panel is replaced by a machine-readable JSON document (schema
+sckoc\-mon\-v1) carrying per-socket and per-core essentials. Per-core
+rows within 10\(deC of TjMax are flagged with an exclamation mark.
+.TP
+.B vcore
+Print per-core (or per-rail, where a board Super I/O sensor driver is
+available) core voltage. On Intel this is the VID request read from MSR
+0x198 (the regulator target; load-line droop is not included), not a
+measured voltage.
+.TP
+.B uncore
+Print per-domain uncore (mesh) frequency limits in MHz. Where the
+intel-uncore-frequency sysfs driver is available this includes the BIOS
+boot values (initial_*_freq_khz); a mismatch against the current Min/Max
+limits is flagged with an asterisk, revealing limits changed at runtime.
+The MSR and TPMI fallback paths expose no boot values. Intel only.
+With
+.B \-\-json
+a JSON document (schema sckoc\-uncore\-v1) is printed instead. When the
+sysfs driver is present this command works without the
+.B msr
+module.
+.TP
+.B dump \fIreg\fR [\fIhi:lo\fR]
+Read MSR
+.I reg
+(hexadecimal, e.g. 0x198) on every socket and print the raw value. An
+optional
+.I hi:lo
+bit range extracts just that field.
+.TP
+.B uninstall \fR[\fB\-y\fR]
+Remove sckoc from the system. The command detects how sckoc was installed
+(script installer, rpm or deb) and removes it accordingly, including shell
+completion, module autoload entries and repository configuration.
+.B \-y
+skips the confirmation prompt.
+.TP
+.BR version ", " \-V
+Print the version and exit.
+.TP
+.BR help ", " \-h
+Print a usage summary and exit.
+.SH ENVIRONMENT
+.TP
+.B INT
+Sampling window in seconds used for frequency, power and C0 residency
+measurements (default: 1).
+.TP
+.B DMI
+Override the path to the
+.BR dmidecode (8)
+executable.
+.TP
+.B READOC
+Override the path to the
+.B readoc
+MSR-reader helper (default: /usr/libexec/sckoc/readoc, falling back to
+readoc found in PATH).
+.SH REQUIREMENTS
+Intel readings need the
+.B msr
+kernel module (the
+.B uncore
+command alone also works without it when the intel-uncore-frequency
+sysfs driver is present). AMD temperature readings need
+.BR k10temp .
+AMD FCLK and PPT readings need
+.I /dev/hsmp
+(the
+.B amd_hsmp
+or
+.B hsmp_acpi
+module, plus HSMP enabled in BIOS). Per-rail voltage readings need a board
+Super I/O sensor driver such as
+.BR nct6775 .
+On consumer Ryzen parts (which have no HSMP) and on kernels whose
+.B k10temp
+predates the CPU family, the out-of-tree
+.B ryzen_smu
+driver is used, when present, as a read-only fallback source for
+temperature, FCLK/MCLK, PPT and rail voltages; such values are marked
+.IR (smu) .
+On TPMI-era Xeon processors (Granite Rapids and later) running kernels
+without the
+.B intel-uncore-frequency-tpmi
+driver, mesh and IOD frequencies are read directly from the TPMI MMIO
+region by the bundled read-only
+.B tpmi-uncore
+helper; such values are marked
+.IR (tpmi) .
+This path requires kernel lockdown to be off.
+Loading these modules is left to the administrator; packaged installs
+autoload
+.B msr
+via
+.IR modules\-load.d .
+.SH FILES
+.TP
+.I /usr/libexec/sckoc/readoc
+MSR reader helper invoked by sckoc.
+.TP
+.I /usr/libexec/sckoc/hsmp\-msg
+AMD HSMP query helper invoked by sckoc.
+.TP
+.I /dev/cpu/*/msr
+Per-CPU MSR device nodes (msr module).
+.TP
+.I /dev/hsmp
+AMD HSMP device node.
+.TP
+.I /etc/modules\-load.d/sckoc\-amd.conf
+Module autoload entries created on AMD hosts by the package scriptlets.
+.SH EXIT STATUS
+0 on success, non-zero on error or unknown command.
+.SH EXAMPLES
+.TP
+One-shot overview:
+.B sudo sckoc
+.TP
+Two-second sampling window:
+.B sudo INT=2 sckoc
+.TP
+Refresh every 3 seconds:
+.B sudo watch \-n 3 sckoc
+.TP
+Intel Vcore field on all sockets:
+.B sudo sckoc dump 0x198 47:32
+.TP
+AMD P-state 0 definition:
+.B sudo sckoc dump 0xC0010064
+.SH SEE ALSO
+.BR dmidecode (8),
+.BR modprobe (8),
+.BR watch (1)
+.SH AUTHOR
+SkyWalkerAMD <scka7t@gmail.com>
+.PP
+Report bugs at
+.UR https://github.com/SkyWalkerAMD/sckoc/issues
+.UE .
+.SH COPYRIGHT
+Copyright \(co 2026 SkyWalkerAMD. License GPL-2.0-only: GNU GPL version 2
+<https://gnu.org/licenses/old\-licenses/gpl\-2.0.html>. This is free
+software: you are free to change and redistribute it. There is NO WARRANTY,
+to the extent permitted by law.

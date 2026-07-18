@@ -1,0 +1,770 @@
+#!/bin/bash
+# SPDX-License-Identifier: GPL-2.0-only
+# sckoc: Intel/AMD read-only hardware monitor (no writes)
+MSRVER=2.3.0
+set -e
+LIBEXEC=/usr/libexec/sckoc
+READOC="${READOC:-$( [ -x "$LIBEXEC/readoc" ] && echo "$LIBEXEC/readoc" || command -v readoc || echo /usr/local/bin/readoc )}"
+INT="${INT:-1}"
+rf(){ "$READOC" -p "$1" -u "$2" 2>/dev/null || echo 0; }
+bits(){ echo $(( ($1 >> $2) & ((1 << $3) - 1) )); }
+# unified sampling snapshots: SNAP["cpu:reg:phase"]=value, filled by ONE batched
+# readoc invocation per (cpu set, phase). Register keys use readoc's canonical
+# lower-case hex. Unreadable pairs simply have no key (sk tests presence).
+declare -A SNAP
+snap_load(){ local c r v; while read -r c r v; do case "$v" in ''|*[!0-9]*) continue ;; esac; SNAP["$c:$r:$3"]=$v; done < <("$READOC" -p "$1" "$2" 2>/dev/null); }
+sv(){ printf '%s' "${SNAP["$1:$2:$3"]:-0}"; }
+sk(){ [ -n "${SNAP["$1:$2:$3"]+x}" ]; }
+
+# --- ryzen_smu PM-table fallback (read-only) ---------------------------------
+# Consumer Ryzen has no HSMP, and pre-6.x kernels lack fam-1Ah k10temp; the
+# out-of-tree ryzen_smu driver exposes the SMU power-metrics table instead.
+# Offsets below are ONLY used when the table version matches the layout they
+# were verified against (Granite Ridge / 9950X3D, anchors: FCLK=BIOS 2000,
+# MCLK=DDR5-6000 1:1, per-core freq vs APERF/MPERF). Unknown version => N/A.
+SMUDRV="${SMUDRV:-/sys/kernel/ryzen_smu_drv}"
+SMU_PMT_VER=00620205  # fam26 Granite Ridge
+# verified offsets: 0x0C PPT W | 0x2C Tctl degC | 0x11C FCLK | 0x13C MCLK
+#                   0x534+4i per-core degC (16) | 0x570+4i per-core GHz
+# SVI3 rails:       0x48 VDDCR_CPU V | 0xD8/0xDC/0xE0 SOC V/A/W (VxA=W verified)
+#                   0xA8 VDDIO_MEM V | 0xE8 VDD_MISC V (1.1 nominal; not DIMM VDDQ)
+smu_ok(){
+  [ -r "$SMUDRV/pm_table" ] && [ -r "$SMUDRV/pm_table_version" ] || return 1
+  [ "$(od -An -tx4 -N4 "$SMUDRV/pm_table_version" 2>/dev/null | tr -d ' \n')" = "$SMU_PMT_VER" ]
+}
+smu_f(){ od -An -j "$1" -N4 -tf4 "$SMUDRV/pm_table" 2>/dev/null | awk '{printf "%.1f",$1}'; }
+smu_f3(){ od -An -j "$1" -N4 -tf4 "$SMUDRV/pm_table" 2>/dev/null | awk '{printf "%.3f",$1}'; }
+smu_fi(){ od -An -j "$1" -N4 -tf4 "$SMUDRV/pm_table" 2>/dev/null | awk '{printf "%d",$1}'; }
+# ------------------------------------------------------------------------------
+
+usage(){
+  cat <<USAGE
+sckoc $MSRVER - read-only MSR/HSMP hardware monitor for Intel & AMD
+
+USAGE:
+  sckoc [mon] [--json]     full monitor panel (default; --json = machine v1)
+  sckoc vcore             per-core / per-rail core voltage
+  sckoc uncore [--json]   uncore/mesh frequency limits incl. BIOS boot values (Intel)
+  sckoc dump <reg> [hi:lo]  read an MSR on every socket, optional bitfield
+  sckoc uninstall [-y]    remove sckoc (auto-detects script/rpm/deb install)
+  sckoc version | -V      print version
+  sckoc help | -h         this help
+
+ENVIRONMENT:
+  INT=<sec>                 sampling window for freq/power/C0 (default 1)
+  DMI=<path>                override dmidecode path
+
+EXAMPLES:
+  sudo sckoc                       # one-shot overview
+  sudo INT=2 sckoc                 # 2-second sampling window
+  sudo watch -n 3 sckoc            # refresh every 3 s
+  sudo sckoc vcore                 # core voltage per core / rail
+  sudo sckoc uncore                # mesh/uncore limits + BIOS boot values
+  sudo sckoc dump 0x198 47:32      # Intel core VID field, all sockets
+  sudo sckoc dump 0xC0010064       # AMD P-state 0 definition
+  sudo sckoc uninstall -y          # remove without prompt
+
+NOTES:
+  Root required. Reads only - never writes MSRs (Secure Boot / lockdown safe).
+  Intel needs the msr module; 'sckoc uncore' alone also works without it when
+  the intel-uncore-frequency sysfs driver is present (kernel 6.5+, EL9 backport).
+  Per-core rows within 10°C of TjMax are flagged with '!'.
+  AMD FCLK/PPT need /dev/hsmp (amd_hsmp or hsmp_acpi
+  plus BIOS HSMP). AMD temperature needs k10temp. Voltage rails need a board
+  Super I/O driver (nct6775 etc). On consumer Ryzen (no HSMP) or old kernels
+  (no fam-1Ah k10temp), the out-of-tree ryzen_smu driver is used as a read-only
+  fallback for temperature/FCLK/PPT/Vcore when present; values are marked (smu).
+  On TPMI-era Xeon (Granite Rapids+) with pre-6.5 kernels, mesh/IOD frequency
+  is read directly from TPMI MMIO by the tpmi-uncore helper; marked (tpmi).
+USAGE
+}
+case "${1:-}" in
+  -h|--help|help) usage; exit 0 ;;
+  -V|version) echo "sckoc $MSRVER"; exit 0 ;;
+  uninstall)
+    [ "$(id -u)" = 0 ] || { echo "run as root: sudo sckoc uninstall"; exit 1; }
+    echo "This will completely remove sckoc (package, files, completion, module autoload, repo configs)."
+    if [ "${2:-}" != "-y" ]; then
+      printf "Continue? [y/N] "; read -r a
+      case "$a" in y|Y) ;; *) echo "aborted"; exit 1 ;; esac
+    fi
+    if command -v rpm >/dev/null && rpm -q sckoc >/dev/null 2>&1; then
+      { command -v dnf >/dev/null && dnf -y remove sckoc; } || { command -v yum >/dev/null && yum -y remove sckoc; } || rpm -e sckoc
+    fi
+    if command -v dpkg >/dev/null && dpkg -s sckoc >/dev/null 2>&1; then
+      { command -v apt-get >/dev/null && apt-get -y remove sckoc; } || dpkg -r sckoc
+    fi
+    rm -f /usr/local/bin/sckoc /usr/local/bin/readoc /usr/local/bin/hsmp-msg /usr/local/bin/tpmi-uncore \
+          /etc/bash_completion.d/sckoc \
+          /etc/modules-load.d/msr.conf /etc/modules-load.d/sckoc.conf /etc/modules-load.d/sckoc-amd.conf /etc/modules-load.d/sckoc-sensors.conf /usr/lib/modules-load.d/sckoc.conf \
+          /etc/apt/sources.list.d/sckoc.list
+    if [ -f /var/lib/sckoc/dkms-amd-hsmp ]; then
+      HV=$(cat /var/lib/sckoc/dkms-amd-hsmp)
+      dkms remove -m amd_hsmp -v "$HV" --all 2>/dev/null || true
+      rm -rf "/usr/src/amd_hsmp-$HV"
+      echo "removed DKMS amd_hsmp $HV (installed by sckoc installer)"
+    elif command -v dkms >/dev/null 2>&1 && dkms status 2>/dev/null | grep -q '^amd_hsmp'; then
+      echo "note: DKMS amd_hsmp was NOT installed by sckoc - kept."
+      echo "      remove manually: dkms remove -m amd_hsmp -v <ver> --all; rm -rf /usr/src/amd_hsmp-<ver>"
+    fi
+    rm -rf /var/lib/sckoc
+    if command -v dkms >/dev/null 2>&1 && dkms status 2>/dev/null | grep -q '^ryzen[-_]smu'; then
+      echo "note: DKMS ryzen_smu is third-party (optional sckoc data source) - kept."
+      echo "      remove manually: dkms remove -m ryzen_smu -v <ver> --all; rm -rf /usr/src/ryzen_smu-<ver>;"
+      echo "      rm -f /etc/modules-load.d/ryzen_smu.conf"
+    fi
+    if command -v dnf >/dev/null && dnf copr list 2>/dev/null | grep -q sckoc; then
+      dnf -y copr remove skywalkeramd/sckoc 2>/dev/null || dnf -y copr disable skywalkeramd/sckoc 2>/dev/null || true
+    fi
+    rm -f /etc/yum.repos.d/_copr*skywalkeramd*sckoc*.repo
+    echo "sckoc fully removed. (shared deps gcc/dmidecode/dkms/git kept; loaded kernel modules stay until reboot)"
+    exit 0 ;;
+esac
+
+case "${1:-mon}" in
+  uncore) ;;  # sysfs path needs no msr module; MSR/TPMI fallbacks degrade on their own
+  *) [ -e /dev/cpu/0/msr ] || { echo "msr module not loaded, run: sudo modprobe msr"; exit 1; } ;;
+esac
+CPUROOT="${CPUROOT:-/sys/devices/system/cpu}"
+VEN="${MSRVEN:-$(awk '/vendor_id/{print $3;exit}' /proc/cpuinfo)}"
+FAM="${MSRFAM:-$(awk '/cpu family/{print $4;exit}' /proc/cpuinfo)}"
+
+declare -A REP
+for d in "$CPUROOT"/cpu[0-9]*; do
+  c=${d##*cpu}; p=$(cat "$d/topology/physical_package_id" 2>/dev/null) || continue
+  [ -z "${REP[$p]}" ] && REP[$p]=$c
+done
+SOCKETS=$(printf '%s\n' "${!REP[@]}" | sort -n)
+CPUS=$(for d in "$CPUROOT"/cpu[0-9]*; do echo "${d##*cpu}"; done | sort -n)
+
+wt(){ awk "BEGIN{printf \"%.1f\", $1}"; }
+siblings(){
+  local f l t
+  for f in core_cpus_list thread_siblings_list; do
+    l=$(cat "$CPUROOT/cpu$1/topology/$f" 2>/dev/null) && break
+  done
+  [ -z "$l" ] && { echo "$1"; return; }
+  for t in ${l//,/ }; do
+    case "$t" in *-*) seq "${t%-*}" "${t#*-}";; *) echo "$t";; esac
+  done | sort -n
+}
+# board-specific nct6798 channel -> CPU rail map (verified by BIOS-vs-sysfs delta test)
+# returns "railN_mV railM_mV ..." for known boards, empty otherwise
+board_nct(){
+  local dir="$1"   # hwmon dir of nct chip
+  local board
+  board=$( (${DMI:-dmidecode} -s baseboard-product-name 2>/dev/null || :) | head -1)
+  case "$board" in
+    *WRX90E-SAGE*)
+      # in0=VDDCR_CPU0, in6=VDDCR_CPU1 (both confirmed vs BIOS override delta on 9995WX)
+      echo "VDDCR_CPU0:$(cat "$dir/in0_input" 2>/dev/null) VDDCR_CPU1:$(cat "$dir/in6_input" 2>/dev/null)"
+      ;;
+    *) echo "" ;;
+  esac
+}
+# fetch a single mapped rail value in volts, or empty. $1=rail label
+board_vcore(){
+  local want="$1" h n pair k v
+  for h in /sys/class/hwmon/hwmon*; do
+    n=$(cat "$h/name" 2>/dev/null) || continue
+    case "$n" in nct*) ;; *) continue ;; esac
+    for pair in $(board_nct "$h"); do
+      k=${pair%%:*}; v=${pair#*:}
+      [ "$k" = "$want" ] && [ -n "$v" ] && { awk "BEGIN{printf \"%.3f\", $v/1000}"; return 0; }
+    done
+  done
+  return 1
+}
+platform_info(){
+  local sb ld oc="" f
+  DRAMSPD=$( (${DMI:-dmidecode} -t 17 2>/dev/null || :) | awk -F": " '
+    /Configured Memory Speed: [0-9]/{spd=$2}
+    /Configured Voltage:/{ if(spd!=""){ v=($2 ~ /^[0-9]/) ? " @ " $2 : ""; c[spd v]++; spd="" } }
+    END{n=0; for(k in c){printf "%s%s (%d DIMMs)",(n++?", ":""),k,c[k]}}')
+  [ -z "$DRAMSPD" ] && DRAMSPD="N/A (need dmidecode)"
+  f=$(ls "${SBDIR:-/sys/firmware/efi/efivars}"/SecureBoot-* 2>/dev/null | head -1)
+  if [ -n "$f" ]; then
+    sb=$( [ "$(od -An -tu1 "$f" 2>/dev/null | awk "{v=\$NF} END{print v}")" = 1 ] && echo Enabled || echo Disabled)
+  else sb="N/A"; fi
+  ld=$(grep -o "\[[a-z]*\]" "${LDF:-/sys/kernel/security/lockdown}" 2>/dev/null | tr -d "[]" || :)
+  [ -z "$ld" ] && ld=none
+  if [ "$VEN" = GenuineIntel ]; then
+    local v194
+    if v194=$("$READOC" -p 0 -u 0x194 2>/dev/null); then
+      oc="  OC Lock $( [ "$(bits "$v194" 20 1)" = 1 ] && echo Enabled || echo Disabled)"
+    fi
+  fi
+  local smt smtlab numa smu=""
+  smt=$( [ "$(cat "$CPUROOT/smt/active" 2>/dev/null)" = 1 ] && echo On || echo Off)
+  smtlab=$( [ "$VEN" = GenuineIntel ] && echo HT || echo SMT)   # Intel calls it Hyper-Threading
+  numa=$(ls -d "${NODEROOT:-/sys/devices/system/node}"/node[0-9]* 2>/dev/null | wc -l)
+  if [ "$VEN" = AuthenticAMD ]; then
+    local sv
+    if sv=$(hsmp_q 0x02 1 0); then
+      smu="  SMU FW $(( (sv>>16)&255 )).$(( (sv>>8)&255 )).$(( sv&255 ))"
+    elif [ -r "$SMUDRV/version" ]; then
+      sv=$(sed 's/^SMU v//' "$SMUDRV/version" 2>/dev/null | tr -d '\n')
+      [ -n "$sv" ] && smu="  SMU FW $sv (smu)"
+    fi
+  fi
+  echo "== Platform =="
+  printf "  Secure Boot %s  Lockdown %s%s  %s %s  NUMA %s node(s)%s\n" "$sb" "$ld" "$oc" "$smtlab" "$smt" "$numa" "$smu"
+  local h n lab v out=""
+  for h in /sys/class/hwmon/hwmon*; do
+    n=$(cat "$h/name" 2>/dev/null) || continue
+    case "$n" in nct*|it87*|asus*|w83*) ;; *) continue ;; esac
+    for f in "$h"/in[0-9]*_input; do
+      [ -e "$f" ] || continue
+      lab=$(cat "${f%_input}_label" 2>/dev/null || basename "${f%_input}")
+      v=$(awk "{printf \"%.3f\", \$1/1000}" "$f" 2>/dev/null) || continue
+      out="$out$lab $v V  "
+    done
+  done
+  [ -n "$out" ] && printf "  Rails: %s\n" "$out" || :
+}
+wt4(){ awk "BEGIN{printf \"%.4f\", $1}"; }
+
+UNC="${UNCSYS:-/sys/devices/system/cpu/intel_uncore_frequency}"
+intel_uncore(){
+  local d pk mesh="" iod="" tag=""
+  [ -d "$UNC" ] || modprobe intel-uncore-frequency-tpmi 2>/dev/null || modprobe intel-uncore-frequency 2>/dev/null || true
+  for d in "$UNC"/uncore* "$UNC"/package_0"$1"_die_*; do
+    [ -e "$d/current_freq_khz" ] || continue
+    pk=$(cat "$d/package_id" 2>/dev/null || echo "$1")
+    [ "$pk" = "$1" ] || continue
+    if [ -z "$mesh" ]; then mesh=$(( $(cat "$d/current_freq_khz") / 1000 ))
+    else iod="$iod $(( $(cat "$d/current_freq_khz") / 1000 ))"; fi
+  done
+  if [ -z "$mesh" ]; then
+    # pre-TPMI Xeon: uncore ratio MSRs (0x621 current, 0x620 min/max)
+    local v621 cur
+    if v621=$("$READOC" -p "$2" -u 0x621 2>/dev/null) && cur=$(( (v621 & 127) * 100 )) && [ "$cur" -gt 0 ]; then
+      mesh=$cur
+    fi
+  fi
+  if [ -z "$mesh" ]; then
+    # TPMI-era Xeon (GNR+) on pre-6.5 kernels: read the uncore TPMI MMIO
+    # region directly via the read-only tpmi-uncore helper. OOBMSM device
+    # order is assumed to match package order.
+    local tp tl tc tn tx
+    tp="${TPMIU:-$( [ -x "$LIBEXEC/tpmi-uncore" ] && echo "$LIBEXEC/tpmi-uncore" || command -v tpmi-uncore || echo /usr/local/bin/tpmi-uncore )}"
+    if [ -x "$tp" ]; then
+      tl=$("$tp" 2>/dev/null | awk -v s="$1" '$1==s{print $2,$3,$4}')
+      while read -r tc tn tx; do
+        [ -n "$tc" ] || continue
+        if [ -z "$mesh" ]; then mesh=$tc; else iod="$iod $tc"; fi
+      done <<< "$tl"
+      [ -n "$mesh" ] && tag=" (tpmi)"
+    fi
+  fi
+  if [ -n "$mesh" ]; then
+    local it="" m0="Mesh"; set -- $iod
+    case $# in
+      0) ;;
+      2) it="  IOD-S $1 MHz  IOD-N $2 MHz" ;;
+      3) m0="Mesh0"; it="  Mesh1 $1 MHz  IOD-S $2 MHz  IOD-N $3 MHz" ;;
+      *) it="  IOD $(echo $iod | tr " " "/") MHz" ;;
+    esac
+    printf "%s %s MHz%s%s" "$m0" "$mesh" "$it" "$tag"
+  else
+    printf "Mesh N/A (need intel-uncore-frequency driver, or tpmi-uncore helper on pre-6.5 kernels)"
+  fi
+}
+
+# `sckoc uncore`: per-domain uncore/mesh frequency limits, including the BIOS
+# boot values. Min/Max are runtime-programmable (sysfs, wrmsr, intel-speed-
+# select tooling); sysfs initial_*_freq_khz preserves what firmware wrote at
+# boot, so a mismatch means the limits were changed after boot. The MSR and
+# TPMI fallback paths carry no boot values (a single register, overwritten in
+# place) - those columns show "-" there.
+uncore_cmd(){
+  local JS=""; [ "${1:-}" = "--json" ] && JS=1
+  if [ "$VEN" != GenuineIntel ]; then
+    [ -n "$JS" ] && { printf '{"schema":"sckoc-uncore-v1","source":null,"domains":[]}\n'; exit 1; }
+    echo "uncore: Intel-only (AMD fabric clock appears in the monitor as FCLK)"; exit 1
+  fi
+  [ -d "$UNC" ] || modprobe intel-uncore-frequency-tpmi 2>/dev/null || modprobe intel-uncore-frequency 2>/dev/null || true
+  k2m(){ local v; if v=$(cat "$1" 2>/dev/null) && [ -n "$v" ]; then echo $((v/1000)); else echo "-"; fi; }
+  jn(){ case "$1" in ''|-|'?') printf null ;; *) printf '%s' "$1" ;; esac; }
+  local shown="" chg="" src="" JOUT="" d n pk cur mn mx imn imx star v621 v620 s c out tp
+  if [ -d "$UNC" ]; then
+    for d in "$UNC"/uncore* "$UNC"/package_*_die_*; do
+      [ -e "$d/min_freq_khz" ] || continue
+      if [ -z "$shown" ] && [ -z "$JS" ]; then echo "== Uncore/mesh frequency limits, MHz (sysfs) =="
+        printf "  %-19s %-4s %-8s %-6s %-6s %-9s %-9s\n" Domain Pkg Current Min Max BIOS-Min BIOS-Max; fi
+      n=${d##*/}
+      if ! pk=$(cat "$d/package_id" 2>/dev/null); then
+        case $n in package_*) pk=${n#package_}; pk=$((10#${pk%%_*})) ;; *) pk="?" ;; esac
+      fi
+      cur=$(k2m "$d/current_freq_khz"); mn=$(k2m "$d/min_freq_khz"); mx=$(k2m "$d/max_freq_khz")
+      imn=$(k2m "$d/initial_min_freq_khz"); imx=$(k2m "$d/initial_max_freq_khz")
+      star=""
+      if [ "$imn" != "-" ] && { [ "$mn" != "$imn" ] || [ "$mx" != "$imx" ]; }; then star=" *"; chg=y; fi
+      if [ -n "$JS" ]; then
+        JOUT="$JOUT${JOUT:+,}{\"name\":\"$n\",\"pkg\":$(jn "$pk"),\"current_mhz\":$(jn "$cur"),\"min_mhz\":$(jn "$mn"),\"max_mhz\":$(jn "$mx"),\"bios_min_mhz\":$(jn "$imn"),\"bios_max_mhz\":$(jn "$imx"),\"changed\":$( [ -n "$star" ] && printf true || printf false )}"
+      else
+        printf "  %-19s %-4s %-8s %-6s %-6s %-9s %-9s%s\n" "$n" "$pk" "$cur" "$mn" "$mx" "$imn" "$imx" "$star"
+      fi
+      shown=y; src=sysfs
+    done
+    [ -z "$JS" ] && [ -n "$chg" ] && echo "  * Min/Max differ from the BIOS boot values (changed at runtime)" || true
+  fi
+  if [ -z "$shown" ]; then
+    # pre-TPMI Xeon fallback: MSR 0x621 current, 0x620 min/max limits
+    for s in $SOCKETS; do
+      c=${REP[$s]}
+      v621=$("$READOC" -p "$c" -u 0x621 2>/dev/null) || continue
+      cur=$(( (v621 & 127) * 100 )); [ "$cur" -gt 0 ] || continue
+      if [ -z "$shown" ] && [ -z "$JS" ]; then echo "== Uncore/mesh frequency limits, MHz (MSR 0x620/0x621; no boot values via MSR) =="
+        printf "  %-7s %-8s %-6s %-6s %-9s %-9s\n" Socket Current Min Max BIOS-Min BIOS-Max; fi
+      v620=$(rf "$c" 0x620)
+      mn=$(( $(bits "$v620" 8 7) * 100 )); mx=$(( $(bits "$v620" 0 7) * 100 ))
+      if [ -n "$JS" ]; then
+        JOUT="$JOUT${JOUT:+,}{\"name\":\"S$s\",\"pkg\":$s,\"current_mhz\":$cur,\"min_mhz\":$mn,\"max_mhz\":$mx,\"bios_min_mhz\":null,\"bios_max_mhz\":null,\"changed\":null}"
+      else
+        printf "  S%-6s %-8s %-6s %-6s %-9s %-9s\n" "$s" "$cur" "$mn" "$mx" - -
+      fi
+      shown=y; src=msr
+    done
+  fi
+  if [ -z "$shown" ]; then
+    # TPMI-era Xeon on pre-6.5 kernels: read-only tpmi-uncore helper
+    tp="${TPMIU:-$( [ -x "$LIBEXEC/tpmi-uncore" ] && echo "$LIBEXEC/tpmi-uncore" || command -v tpmi-uncore || echo /usr/local/bin/tpmi-uncore )}"
+    if [ -x "$tp" ] && out=$("$tp" 2>/dev/null) && [ -n "$out" ]; then
+      if [ -z "$JS" ]; then echo "== Uncore/mesh frequency limits, MHz (TPMI MMIO; no boot values via TPMI) =="
+        printf "  %-7s %-8s %-6s %-6s %-9s %-9s\n" Pkg Current Min Max BIOS-Min BIOS-Max; fi
+      while read -r pk cur mn mx; do
+        [ -n "$pk" ] || continue
+        if [ -n "$JS" ]; then
+          JOUT="$JOUT${JOUT:+,}{\"name\":\"S$pk\",\"pkg\":$pk,\"current_mhz\":$cur,\"min_mhz\":$mn,\"max_mhz\":$mx,\"bios_min_mhz\":null,\"bios_max_mhz\":null,\"changed\":null}"
+        else
+          printf "  S%-6s %-8s %-6s %-6s %-9s %-9s\n" "$pk" "$cur" "$mn" "$mx" - -
+        fi
+        shown=y; src=tpmi
+      done <<< "$out"
+    fi
+  fi
+  if [ -n "$JS" ]; then
+    printf '{"schema":"sckoc-uncore-v1","source":%s,"domains":[%s]}\n' "$( [ -n "$src" ] && printf '"%s"' "$src" || printf null )" "$JOUT"
+    [ -n "$shown" ] || exit 1
+    return
+  fi
+  [ -n "$shown" ] || { echo "uncore: no data (need intel-uncore-frequency driver, readable MSR 0x620/0x621, or tpmi-uncore helper)"; exit 1; }
+}
+
+# CPU identification block shown above the per-core overview: marketing name,
+# core/thread topology per socket, family/model/stepping and microcode rev.
+cpu_model_block(){
+  local s c mn md st uc thr cor cc
+  echo "== CPU =="
+  for s in $SOCKETS; do
+    c=${REP[$s]}
+    mn=$(awk -F':[ \t]*' -v p="$c" '$1 ~ /^processor/{cur=$2+0} cur==p && $1 ~ /^model name/{print $2; exit}' /proc/cpuinfo)
+    md=$(awk -F':[ \t]*' -v p="$c" '$1 ~ /^processor/{cur=$2+0} cur==p && $1 ~ /^model[ \t]*$/{print $2; exit}' /proc/cpuinfo)
+    st=$(awk -F':[ \t]*' -v p="$c" '$1 ~ /^processor/{cur=$2+0} cur==p && $1 ~ /^stepping/{print $2; exit}' /proc/cpuinfo)
+    uc=$(awk -F':[ \t]*' -v p="$c" '$1 ~ /^processor/{cur=$2+0} cur==p && $1 ~ /^microcode/{print $2; exit}' /proc/cpuinfo)
+    thr=0; cor=0
+    for cc in $CPUS; do
+      [ "$(cat "$CPUROOT/cpu$cc/topology/physical_package_id" 2>/dev/null)" = "$s" ] || continue
+      thr=$((thr+1))
+      [ "$(siblings "$cc" | head -1)" = "$cc" ] && cor=$((cor+1))
+    done
+    printf "  S%s  %s  %sC/%sT  fam%s model %s stepping %s%s\n" \
+      "$s" "${mn:-unknown}" "$cor" "$thr" "$FAM" "${md:--}" "${st:--}" "${uc:+  ucode $uc}"
+  done
+}
+intel_sock(){
+  local c=$2 v198 v19c v610 eu pu e1 e2 d1 d2 de dd tj base pl1 pl2 thr
+  tj=$(bits "$(rf "$c" 0x1A2)" 16 8); base=$(bits "$(rf "$c" 0xCE)" 8 8)
+  eu=$(bits "$(rf "$c" 0x606)" 8 5);  pu=$(bits "$(rf "$c" 0x606)" 0 4)
+  v610=$(rf "$c" 0x610)
+  pl1=$(wt "$(bits "$v610" 0 15)/2^$pu"); pl2=$(wt "$(bits "$v610" 32 15)/2^$pu")
+  local en1 en2 lk
+  en1=$( [ "$(bits "$v610" 15 1)" = 1 ] && echo Enabled || echo Disabled)
+  en2=$( [ "$(bits "$v610" 47 1)" = 1 ] && echo Enabled || echo Disabled)
+  lk=$( [ "$(bits "$v610" 63 1)" = 1 ] && echo "  [PL Locked]" || : )
+  # counters come from the shared sampling window (see mon_sample)
+  local ts1 ts2 dts pcs=""
+  ts1=$(sv "$c" 0x10 T0); ts2=$(sv "$c" 0x10 T1)
+  dts=$(( ts2 - ts1 )); [ "$dts" -le 0 ] && dts=1
+  sk "$c" 0x60d T0 && sk "$c" 0x60d T1 && pcs="$pcs  PC2 $(( ( $(sv "$c" 0x60d T1) - $(sv "$c" 0x60d T0) ) * 100 / dts ))%" || true
+  sk "$c" 0x3f9 T0 && sk "$c" 0x3f9 T1 && pcs="$pcs  PC6 $(( ( $(sv "$c" 0x3f9 T1) - $(sv "$c" 0x3f9 T0) ) * 100 / dts ))%" || true
+  e1=$(( $(sv "$c" 0x611 T0) & 4294967295 )); e2=$(( $(sv "$c" 0x611 T1) & 4294967295 ))
+  d1=$(( $(sv "$c" 0x619 T0) & 4294967295 )); d2=$(( $(sv "$c" 0x619 T1) & 4294967295 ))
+  de=$(( e2>=e1 ? e2-e1 : e2-e1+4294967296 )); dd=$(( d2>=d1 ? d2-d1 : d2-d1+4294967296 ))
+  v198=$(sv "$c" 0x198 T1); v19c=$(sv "$c" 0x19c T1)
+  local mx=0 t cc
+  for cc in $CPUS; do
+    [ "$(cat "$CPUROOT/cpu$cc/topology/physical_package_id")" = "$1" ] || continue
+    t=$(( tj - $(bits "$(sv "$cc" 0x19c T1)" 16 7) )); [ "$t" -gt "$mx" ] && mx=$t || true
+  done
+  local un; un=$(intel_uncore "$1" "$c")
+  thr=""; [ "$(bits "$v19c" 0 1)" = 1 ] && thr="  [THROTTLING!]"; [ -z "$thr" ] && [ "$(bits "$v19c" 1 1)" = 1 ] && thr="  [Throttle-Log]"
+  printf "  S%s  VID %s V  Temp Max %d°C (TjMax %d°C)%s\n" "$1" "$(wt4 "$(bits "$v198" 32 16)/8192")" "$mx" "$tj" "$thr"
+  printf "      Core %d00 MHz (Base %d00 MHz)  %s\n" "$(bits "$v198" 8 8)" "$base" "$un"
+  printf "      DRAM %s\n" "$DRAMSPD"
+  printf "      Pkg %s W  DRAM %s W%s\n" "$(wt "$de/2^$eu/$INT")" "$(wt "$dd/2^$eu/$INT")" "$pcs"
+  printf "      PL1 %s W (%s)  PL2 %s W (%s)%s\n" "$pl1" "$en1" "$pl2" "$en2" "$lk"
+}
+
+amd_p0(){ local v; v=$(rf "$1" 0xC0010064)
+  if [ "$FAM" -ge 26 ]; then echo $(( (v & 0xFFF) * 5 ))
+  else local f=$((v & 0xFF)) d=$(( (v>>8) & 0x3F )); [ "$d" -eq 0 ] && d=8; echo $(( f*200/d )); fi; }
+amd_vid(){
+  local ps v vid reg
+  ps=$(( $(rf "$1" 0xC0010063) & 7 ))
+  reg=$(printf '0x%X' $(( 0xC0010064 + ps )))
+  v=$(rf "$1" "$reg")
+  if [ "$FAM" -ge 26 ]; then
+    vid=$(bits "$v" 12 8)   # fam26: VID[19:12], V = 0.250 + VID*5mV (calibrated on 9995WX)
+    [ "$vid" -gt 0 ] && wt4 "0.250 + $vid*0.005" || echo ""
+  elif [ "$FAM" -le 23 ]; then
+    vid=$(bits "$v" 14 8)   # fam17h SVI2: VID[21:14], V = 1.55 - VID*6.25mV
+    [ "$vid" -gt 0 ] && [ "$vid" -lt 248 ] && wt4 "1.55 - $vid*0.00625" || echo ""
+  else echo ""; fi
+}
+amd_temp(){
+  local h i=0 f t mx=""
+  for h in "${HWROOT:-/sys/class/hwmon}"/hwmon*; do
+    [ "$(cat "$h/name" 2>/dev/null)" = k10temp ] || continue
+    if [ "$i" -eq "$1" ]; then
+      for f in "$h"/temp[0-9]*_input; do
+        [ -e "$f" ] || continue
+        t=$(( $(cat "$f") / 1000 ))
+        if [ -z "$mx" ] || [ "$t" -gt "$mx" ]; then mx=$t; fi
+      done
+      if [ -n "$mx" ]; then printf "%d°C" "$mx"; return; fi
+      break
+    fi
+    i=$((i+1))
+  done
+  # no k10temp sensor for this socket: PM-table Tctl (socket 0 only; table is socket-local)
+  if [ "$1" = 0 ] && smu_ok; then
+    t=$(smu_fi 0x2C)
+    case "$t" in ''|*[!0-9]*) ;; *) [ "$t" -gt 0 ] && [ "$t" -lt 150 ] && { printf "%d°C (smu)" "$t"; return; } ;; esac
+  fi
+  printf "N/A (need k10temp)"; }
+hsmp_q(){
+  local h="${HSMP:-$( [ -x "$LIBEXEC/hsmp-msg" ] && echo "$LIBEXEC/hsmp-msg" || command -v hsmp-msg || echo /usr/local/bin/hsmp-msg )}"
+  [ -e /dev/hsmp ] || modprobe amd_hsmp 2>/dev/null || modprobe hsmp_acpi 2>/dev/null || true
+  [ -e /dev/hsmp ] && [ -x "$h" ] && "$h" "$@" 2>/dev/null
+}
+amd_fclk(){
+  local out f m
+  if out=$(hsmp_q 0x0F 2 "$1"); then printf "FCLK %s MHz / MCLK %s MHz" ${out}
+  elif [ "$1" = 0 ] && smu_ok; then
+    f=$(smu_fi 0x11C); m=$(smu_fi 0x13C)
+    printf "FCLK %s MHz / MCLK %s MHz (smu)" "$f" "$m"
+  elif [ "$FAM" -ge 25 ] && ! grep -Eqi 'epyc|threadripper' /proc/cpuinfo 2>/dev/null; then
+    printf "FCLK N/A (consumer Ryzen has no HSMP; ryzen_smu provides it, see README)"
+  else printf "FCLK N/A (need amd_hsmp + BIOS HSMP)"; fi
+}
+amd_sock(){
+  local c=$2 eu e1 e2 de
+  eu=$(bits "$(rf "$c" 0xC0010299)" 8 5)
+  e1=$(( $(sv "$c" 0xc001029b T0) & 4294967295 )); e2=$(( $(sv "$c" 0xc001029b T1) & 4294967295 ))
+  de=$(( e2>=e1 ? e2-e1 : e2-e1+4294967296 ))
+  local ph="" ppt=""
+  [ "$(hsmp_q 0x0B 1 "$1")" = 1 ] && ph="  [PROCHOT!]" || true
+  local pl plm
+  if pl=$(hsmp_q 0x06 1 "$1"); then
+    plm=$(hsmp_q 0x07 1 "$1") || plm=""
+    ppt="  PPT $(wt "$pl/1000") W${plm:+ (Max $(wt "$plm/1000") W)}"
+  elif [ "$1" = 0 ] && smu_ok; then
+    pl=$(smu_f 0x0C); [ -n "$pl" ] && ppt="  PPT $pl W (smu)"
+  fi
+  # prefer real per-rail vcore from board sensor map; then SMU SVI3 telemetry; then P-state nominal
+  local vctxt r0 r1
+  r0=$(board_vcore VDDCR_CPU0) || r0=""
+  r1=$(board_vcore VDDCR_CPU1) || r1=""
+  if [ -n "$r0" ] || [ -n "$r1" ]; then
+    vctxt="Vcore ${r0:+CPU0 $r0 V}${r0:+  }${r1:+CPU1 $r1 V}"
+  elif [ "$1" = 0 ] && smu_ok; then
+    local sv3; sv3=$(smu_f3 0x48)
+    case "$sv3" in
+      0.???|1.???) vctxt="Vcore $sv3 V (smu SVI3)" ;;
+      *) vctxt="Vcore N/A" ;;
+    esac
+  else
+    local vc; vc=$(amd_vid "$2")
+    if [ -z "$vc" ]; then vctxt="Vcore N/A"
+    elif [ "$FAM" -ge 26 ]; then vctxt="Vcore ~$vc V (P-state nominal, not rail V)"
+    else vctxt="Vcore ~$vc V (P-state VID)"; fi
+  fi
+  printf "  S%s  Temp Max %s  %s%s\n" "$1" "$(amd_temp "$1")" "$vctxt" "$ph"
+  local fm="" cl="" bw="" c0=""
+  if fm=$(hsmp_q 0x1C 1 "$1"); then fm="  Fmax $(( (fm>>16)&65535 )) MHz / Fmin $(( fm&65535 )) MHz"; else fm=""; fi
+  if cl=$(hsmp_q 0x10 1 "$1"); then cl="  CCLK Limit $cl MHz"; else cl=""; fi
+  if bw=$(hsmp_q 0x14 1 "$1"); then bw="  BW $(( (bw>>8)&4095 ))/$(( (bw>>20)&4095 )) GB/s ($(( bw&255 ))%)"; else bw=""; fi
+  if c0=$(hsmp_q 0x11 1 "$1"); then c0="  C0 ${c0}%"; else c0=""; fi
+  printf "      P0 Base %d MHz  %s%s%s\n" "$(amd_p0 "$c")" "$(amd_fclk "$1")" "$fm" "$cl"
+  printf "      DRAM %s%s\n" "$DRAMSPD" "$bw"
+  printf "      Pkg %s W%s%s\n" "$(wt "$de/2^$eu/$INT")" "$ppt" "$c0"
+}
+
+percore(){
+  local -A TJ
+  local c base eu=0 HOTANY=""
+  for s in $SOCKETS; do TJ[$s]=$(bits "$(rf "${REP[$s]}" 0x1A2)" 16 8); done
+  [ "$VEN" = AuthenticAMD ] && eu=$(bits "$(rf 0 0xC0010299)" 8 5)
+  local -A CCD CCDT PKGMIN PKGSTEP TCTL
+  if [ "$VEN" = AuthenticAMD ]; then
+    local l3 pk h f lab s=0 prev
+    for c in $CPUS; do
+      l3=$(cat "$CPUROOT/cpu$c/cache/index3/id" 2>/dev/null) || l3=-1
+      CCD[$c]=$l3
+      pk=$(cat "$CPUROOT/cpu$c/topology/physical_package_id" 2>/dev/null || echo 0)
+      if [ "$l3" -ge 0 ]; then
+        if [ -z "${PKGMIN[$pk]}" ] || [ "$l3" -lt "${PKGMIN[$pk]}" ]; then PKGMIN[$pk]=$l3; fi
+        # smallest positive delta between distinct L3 ids = CCD numbering step (1 on EPYC, 2 on fam26)
+        prev=${PKGMIN[$pk]}
+        if [ "$l3" -gt "$prev" ]; then
+          local d=$(( l3 - prev ))
+          [ -z "${PKGSTEP[$pk]}" ] && PKGSTEP[$pk]=$d
+          [ "$d" -lt "${PKGSTEP[$pk]}" ] && [ "$d" -gt 0 ] && PKGSTEP[$pk]=$d
+        fi
+      fi
+    done
+    for h in "${HWROOT:-/sys/class/hwmon}"/hwmon*; do
+      [ "$(cat "$h/name" 2>/dev/null)" = k10temp ] || continue
+      for f in "$h"/temp[0-9]*_label; do
+        [ -e "$f" ] || continue
+        lab=$(cat "$f")
+        case "$lab" in
+          Tccd[0-9]*) CCDT["$s:$(( ${lab#Tccd} - 1 ))"]=$(( $(cat "${f%_label}_input") / 1000 )) ;;
+          Tctl)       TCTL[$s]=$(( $(cat "${f%_label}_input") / 1000 )) ;;
+        esac
+      done
+      s=$((s+1))
+    done
+    # PM-table fallback: build CCD temps from per-core sensors (max per CCD group)
+    if [ ${#CCDT[@]} -eq 0 ] && smu_ok; then
+      local nc=0 nccd gi gt grel gsz
+      for c in $CPUS; do [ "$(siblings "$c" | head -1)" = "$c" ] && nc=$((nc+1)); done
+      nccd=$(printf '%s\n' "${CCD[@]}" | sort -un | grep -c -v '^-1$' || echo 0)
+      if [ "$nccd" -gt 0 ] && [ "$nc" -ge "$nccd" ]; then
+        gsz=$(( nc / nccd )); [ "$gsz" -lt 1 ] && gsz=1
+        gi=0
+        while [ "$gi" -lt "$nc" ]; do
+          gt=$(smu_fi $(( 0x534 + gi * 4 )))
+          case "$gt" in ''|*[!0-9]*) gi=$((gi+1)); continue ;; esac
+          if [ "$gt" -gt 0 ] && [ "$gt" -lt 150 ]; then
+            grel=$(( gi / gsz ))
+            if [ -z "${CCDT["0:$grel"]}" ] || [ "$gt" -gt "${CCDT["0:$grel"]}" ]; then CCDT["0:$grel"]=$gt; fi
+          fi
+          gi=$((gi+1))
+        done
+      fi
+      if [ -z "${TCTL[0]}" ]; then
+        gt=$(smu_fi 0x2C)
+        case "$gt" in ''|*[!0-9]*) ;; *) [ "$gt" -gt 0 ] && [ "$gt" -lt 150 ] && TCTL[0]=$gt ;; esac
+      fi
+    fi
+  fi
+  for c in $CPUS; do
+    local dm da bm=-1 sib extra="" hot=""
+    sib=$(siblings "$c")
+    [ "$(echo "$sib" | head -1)" = "$c" ] || continue
+    local c0m=0 dt c0
+    for t in $sib; do
+      dm=$(( $(sv "$t" 0xe7 T1) - $(sv "$t" 0xe7 T0) ))
+      da=$(( $(sv "$t" 0xe8 T1) - $(sv "$t" 0xe8 T0) ))
+      dt=$(( $(sv "$t" 0x10 T1) - $(sv "$t" 0x10 T0) )); [ "$dt" -le 0 ] && dt=1
+      c0=$(( dm * 100 / dt )); [ "$c0" -gt 100 ] && c0=100; [ "$c0" -gt "$c0m" ] && c0m=$c0 || true
+      [ "$dm" -gt 0 ] && [ $(( da * 1000 / dm )) -gt "$bm" ] && { bm=$(( da * 1000 / dm )); } || true
+    done
+    [ "$bm" -lt 0 ] && continue
+    if [ "$VEN" = GenuineIntel ]; then
+      base=$(bits "$(rf "$c" 0xCE)" 8 8)
+      local pkg; pkg=$(cat "$CPUROOT/cpu$c/topology/physical_package_id")
+      local c62 dc6 c6p
+      c62=$(sv "$c" 0x3fd T1); dc6=$(( c62 - $(sv "$c" 0x3fd T0) )); [ "$dc6" -lt 0 ] && dc6=0
+      c6p=$(( dc6 * 100 / dt )); [ "$c6p" -gt 100 ] && c6p=100
+      local tc; tc=$(( TJ[$pkg] - $(bits "$(sv "$c" 0x19c T1)" 16 7) ))
+      [ "$tc" -ge $(( TJ[$pkg] - 10 )) ] && { hot=" !"; HOTANY=1; }
+      extra="  $(printf '%3d' "$tc")°C  $(wt4 "$(bits "$(sv "$c" 0x198 T1)" 32 16)/8192") V  C0 $(printf '%3d' "$c0m")%  C6 $(printf '%3d' "$c6p")%$hot"
+    else
+      base=$(( $(amd_p0 "$c") / 100 ))
+      local e2 e1a dE; e2=$(( $(sv "$c" 0xc001029a T1) & 4294967295 )); e1a=$(( $(sv "$c" 0xc001029a T0) & 4294967295 ))
+      dE=$(( e2>=e1a ? e2-e1a : e2-e1a+4294967296 ))
+      local pk2 rel tp td cd step
+      pk2=$(cat "$CPUROOT/cpu$c/topology/physical_package_id" 2>/dev/null || echo 0)
+      step=${PKGSTEP[$pk2]:-1}; [ "$step" -lt 1 ] && step=1
+      if [ "${CCD[$c]}" -ge 0 ] && [ -n "${PKGMIN[$pk2]}" ]; then
+        rel=$(( (CCD[$c] - PKGMIN[$pk2]) / step ))
+        tp=${CCDT["$pk2:$rel"]:-}
+        cd=$(printf 'ccd%-2d' "$rel")
+      else rel=-1; tp=""; cd="ccd- "; fi
+      # Tccd missing (e.g. k10temp lacks per-CCD on fam26): fall back to socket Tctl, mark with *
+      if [ -n "$tp" ]; then td="$(printf '%3d' "$tp")°C"
+      elif [ -n "${TCTL[$pk2]:-${TCTL[0]}}" ]; then td="$(printf '%3d' "${TCTL[$pk2]:-${TCTL[0]}}")*C"
+      else td=" N/A "; fi
+      extra="  $(printf '%6s' "$(wt "($dE) * ($base) * 100000000 / (2^$eu * ($dt))")") W  $cd $td  C0 $(printf '%3d' "$c0m")%"
+    fi
+    printf "  core%-3d %5d MHz%s\n" "$c" $(( base * 100 * bm / 1000 )) "$extra"
+  done
+  { [ "$VEN" = GenuineIntel ] && [ -n "$HOTANY" ] && echo "  ! = within 10°C of TjMax"; } || true
+}
+
+# one shared sampling window for the whole panel: every time-delta counter
+# (aperf/mperf/tsc, C6/PC2/PC6 residency, package & DRAM/core energy) is read
+# for all CPUs in one batched readoc call at T0 and one at T1, with a single
+# sleep in between - instead of one sleep per socket plus one for the cores.
+mon_sample(){
+  local CPUL REPL s
+  CPUL=$(printf '%s,' $CPUS); CPUL=${CPUL%,}
+  REPL=$(for s in $SOCKETS; do printf '%s,' "${REP[$s]}"; done); REPL=${REPL%,}
+  if [ "$VEN" = GenuineIntel ]; then
+    snap_load "$CPUL" 0xe7,0xe8,0x10,0x3fd,0x19c,0x198 T0
+    snap_load "$REPL" 0x60d,0x3f9,0x611,0x619 T0
+    sleep "$INT"
+    snap_load "$CPUL" 0xe7,0xe8,0x10,0x3fd,0x19c,0x198 T1
+    snap_load "$REPL" 0x60d,0x3f9,0x611,0x619 T1
+  else
+    snap_load "$CPUL" 0xe7,0xe8,0x10,0xc001029a T0
+    snap_load "$REPL" 0xc001029b T0
+    sleep "$INT"
+    snap_load "$CPUL" 0xe7,0xe8,0x10,0xc001029a T1
+    snap_load "$REPL" 0xc001029b T1
+  fi
+}
+mon(){
+  platform_info
+  mon_sample
+  echo "== $VEN fam${FAM}  Per-socket Overview =="
+  for s in $SOCKETS; do
+    if [ "$VEN" = GenuineIntel ]; then intel_sock "$s" "${REP[$s]}"; else amd_sock "$s" "${REP[$s]}"; fi
+  done
+  cpu_model_block
+  echo "== Per-core Overview =="
+  if [ "$VEN" = GenuineIntel ]; then
+    echo "  Core      Freq      Temp   VID          C0      C6"
+  else
+    local hasccd=0 hf
+    for hf in "${HWROOT:-/sys/class/hwmon}"/hwmon*/temp[0-9]*_label; do
+      [ -e "$hf" ] || continue
+      case "$(cat "$hf" 2>/dev/null)" in Tccd*) hasccd=1; break ;; esac
+    done
+    [ "$hasccd" = 0 ] && smu_ok && hasccd=1
+    if [ "$hasccd" = 1 ]; then
+      echo "  Core      Freq       Power     CCD-Temp     C0"
+    else
+      echo "  Core      Freq       Power     CCD-Temp     C0   (*C = socket Tctl; per-CCD needs newer k10temp, or ryzen_smu)"
+    fi
+  fi
+  percore
+}
+
+# --json v1 (schema sckoc-mon-v1): machine-readable core subset of the panel.
+# Text-only extras (PL, PC-states, DRAM, mesh, throttle flags, board rails)
+# stay in the human panel; scripts get sockets + per-core essentials.
+mon_json(){
+  mon_sample
+  local first=1 s c p tj basec eu de e1 e2
+  printf '{"schema":"sckoc-mon-v1","version":"%s","vendor":"%s","family":%s,"interval_s":%s,"sockets":[' "$MSRVER" "$VEN" "$FAM" "$INT"
+  for s in $SOCKETS; do
+    c=${REP[$s]}
+    [ $first = 1 ] || printf ','
+    first=0
+    if [ "$VEN" = GenuineIntel ]; then
+      tj=$(bits "$(rf "$c" 0x1A2)" 16 8); basec=$(bits "$(rf "$c" 0xCE)" 8 8)
+      eu=$(bits "$(rf "$c" 0x606)" 8 5)
+      e1=$(( $(sv "$c" 0x611 T0) & 4294967295 )); e2=$(( $(sv "$c" 0x611 T1) & 4294967295 ))
+      de=$(( e2>=e1 ? e2-e1 : e2-e1+4294967296 ))
+      local mx=0 t cc v198
+      for cc in $CPUS; do
+        [ "$(cat "$CPUROOT/cpu$cc/topology/physical_package_id" 2>/dev/null)" = "$s" ] || continue
+        t=$(( tj - $(bits "$(sv "$cc" 0x19c T1)" 16 7) )); [ "$t" -gt "$mx" ] && mx=$t || true
+      done
+      v198=$(sv "$c" 0x198 T1)
+      printf '{"id":%s,"tjmax_c":%s,"temp_max_c":%s,"vid_v":%s,"core_mhz":%s,"base_mhz":%s,"pkg_w":%s}' \
+        "$s" "$tj" "$mx" "$(wt4 "$(bits "$v198" 32 16)/8192")" "$(( $(bits "$v198" 8 8) * 100 ))" "$(( basec * 100 ))" "$(wt "$de/2^$eu/$INT")"
+    else
+      eu=$(bits "$(rf "$c" 0xC0010299)" 8 5)
+      e1=$(( $(sv "$c" 0xc001029b T0) & 4294967295 )); e2=$(( $(sv "$c" 0xc001029b T1) & 4294967295 ))
+      de=$(( e2>=e1 ? e2-e1 : e2-e1+4294967296 ))
+      printf '{"id":%s,"pkg_w":%s}' "$s" "$(wt "$de/2^$eu/$INT")"
+    fi
+  done
+  printf '],"cores":['
+  first=1
+  for c in $CPUS; do
+    local sib dm da dt bm=-1 c0m=0 c0 t
+    sib=$(siblings "$c")
+    [ "$(echo "$sib" | head -1)" = "$c" ] || continue
+    for t in $sib; do
+      dm=$(( $(sv "$t" 0xe7 T1) - $(sv "$t" 0xe7 T0) ))
+      da=$(( $(sv "$t" 0xe8 T1) - $(sv "$t" 0xe8 T0) ))
+      dt=$(( $(sv "$t" 0x10 T1) - $(sv "$t" 0x10 T0) )); [ "$dt" -le 0 ] && dt=1
+      c0=$(( dm * 100 / dt )); [ "$c0" -gt 100 ] && c0=100; [ "$c0" -gt "$c0m" ] && c0m=$c0 || true
+      [ "$dm" -gt 0 ] && [ $(( da * 1000 / dm )) -gt "$bm" ] && bm=$(( da * 1000 / dm )) || true
+    done
+    [ "$bm" -lt 0 ] && continue
+    p=$(cat "$CPUROOT/cpu$c/topology/physical_package_id" 2>/dev/null || echo 0)
+    [ $first = 1 ] || printf ','
+    first=0
+    if [ "$VEN" = GenuineIntel ]; then
+      local bc tj2 c62 dc6 c6p
+      bc=$(bits "$(rf "$c" 0xCE)" 8 8)
+      tj2=$(bits "$(rf "${REP[$p]}" 0x1A2)" 16 8)
+      c62=$(sv "$c" 0x3fd T1); dc6=$(( c62 - $(sv "$c" 0x3fd T0) )); [ "$dc6" -lt 0 ] && dc6=0
+      c6p=$(( dc6 * 100 / dt )); [ "$c6p" -gt 100 ] && c6p=100
+      printf '{"cpu":%s,"socket":%s,"mhz":%s,"temp_c":%s,"vid_v":%s,"c0_pct":%s,"c6_pct":%s}' \
+        "$c" "$p" $(( bc * 100 * bm / 1000 )) "$(( tj2 - $(bits "$(sv "$c" 0x19c T1)" 16 7) ))" "$(wt4 "$(bits "$(sv "$c" 0x198 T1)" 32 16)/8192")" "$c0m" "$c6p"
+    else
+      local bc; bc=$(( $(amd_p0 "$c") / 100 ))
+      printf '{"cpu":%s,"socket":%s,"mhz":%s,"c0_pct":%s}' "$c" "$p" $(( bc * 100 * bm / 1000 )) "$c0m"
+    fi
+  done
+  printf ']}\n'
+}
+
+case "${1:-mon}" in
+  mon) if [ "${2:-}" = "--json" ]; then mon_json; else mon; fi ;;
+  --json) mon_json ;;
+  uncore) shift; uncore_cmd "$@" ;;
+  dump) shift; for s in $SOCKETS; do
+        printf "  S%s cpu%-3s = 0x%s\n" "$s" "${REP[$s]}" \
+          "$("$READOC" -p "${REP[$s]}" ${2:+-f $2} -X "$1" 2>/dev/null)"; done ;;
+  vcore)
+    if [ "$VEN" = GenuineIntel ]; then
+      echo "== Per-core VID (0x198[47:32] 请求电压/调节器目标值, 未含 loadline 掉压, 非实测; 包级平台各核相同) =="
+      for c in $CPUS; do
+        [ "$(siblings "$c" | head -1)" = "$c" ] || continue
+        printf "  core%-3d %s V\n" "$c" "$(wt4 "$(bits "$(rf "$c" 0x198)" 32 16)/8192")"
+      done
+    else
+      br0=$(board_vcore VDDCR_CPU0) || br0=""
+      br1=$(board_vcore VDDCR_CPU1) || br1=""
+      if [ -n "$br0" ] || [ -n "$br1" ]; then
+        echo "== Per-rail Vcore (board sensor, nct6798) =="
+        [ -n "$br0" ] && printf "  VDDCR_CPU0  %s V\n" "$br0"
+        [ -n "$br1" ] && printf "  VDDCR_CPU1  %s V\n" "$br1"
+        echo "  (per-core identical: AMD exposes no per-core voltage; rails are VRM-domain)"
+        exit 0
+      fi
+      if smu_ok; then
+        echo "== Rails (ryzen_smu PM table, SMU SVI3 telemetry) =="
+        printf "  VDDCR_CPU   %s V\n" "$(smu_f3 0x48)"
+        printf "  VDDCR_SOC   %s V  (%s A, %s W)\n" "$(smu_f3 0xD8)" "$(smu_f 0xDC)" "$(smu_f 0xE0)"
+        printf "  VDDIO_MEM   %s V   VDD_MISC %s V\n" "$(smu_f3 0xA8)" "$(smu_f3 0xE8)"
+        echo "  (per-core identical: single VDDCR rail on AM5; SMU-reported telemetry)"
+        exit 0
+      fi
+      v=$(amd_vid 0)
+      [ -n "$v" ] || { echo "fam$FAM P-state VID 未验证 (需 zenpower/ryzen_smu 或已收录主板)"; exit 1; }
+      if [ "$FAM" -ge 26 ]; then
+        echo "== Per-core Vcore: P-state nominal only. fam26 dual-rail BIOS voltage is NOT in MSR =="
+        echo "==   Real per-rail needs a mapped board sensor or BIOS. =="
+      else
+        echo "== Per-core Vcore (P-state VID; per-rail override & LLC not visible) =="
+      fi
+      for c in $CPUS; do
+        [ "$(siblings "$c" | head -1)" = "$c" ] || continue
+        printf "  core%-3d ~%s V\n" "$c" "$(amd_vid "$c")"
+      done
+    fi ;;
+  -V|version) echo "sckoc $MSRVER"; exit 0 ;;
+  -h|--help|help) usage; exit 0 ;;
+  *) echo "sckoc: unknown command '$1'"; echo "try: sckoc help"; exit 1 ;;
+esac

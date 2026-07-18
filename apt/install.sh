@@ -24,7 +24,7 @@ cat > "$T/version.h" <<'VER_H'
 /* SPDX-License-Identifier: GPL-2.0-only */
 #ifndef SCKOC_VERSION_H
 #define SCKOC_VERSION_H
-#define VERSION_STRING "2.2.1"
+#define VERSION_STRING "2.3.0"
 #endif
 VER_H
 cat > "$T/readoc.c" <<'READOC_C'
@@ -32,14 +32,23 @@ cat > "$T/readoc.c" <<'READOC_C'
 /*
  * readoc.c - MSR reader for sckoc (socket/overclock monitor)
  *
- * Reads a Model-Specific Register from /dev/cpu/N/msr.
+ * Reads Model-Specific Registers from /dev/cpu/N/msr.
  *
  * Part of sckoc. Original implementation, GPL-2.0-only.
  * Copyright (C) 2026 SkyWalkerAMD
  *
- * Reads one 64-bit MSR at the given register number on a chosen CPU,
- * optionally extracting a [high:low] bitfield, and prints it as
- * unsigned decimal (default) or hexadecimal.
+ * Single mode (backward compatible): one CPU, one register, optional
+ * [high:low] bitfield, printed as unsigned decimal (default) or hex.
+ *
+ * Batch mode: -p accepts a CPU list ("0-27" or "0,4,8-11") and the
+ * register argument accepts a comma-separated list ("0xE7,0xE8,0x10").
+ * If more than one cpu/register pair results, output is one line per
+ * readable pair: "<cpu> <0xreg> <value>" (unsigned decimal; -f/-x/-X
+ * do not apply). Unreadable pairs are silently skipped; exit 0 if at
+ * least one pair was printed, 4 if none.
+ *
+ * READOC_DEV may override the device path printf pattern (default
+ * "/dev/cpu/%d/msr"); intended for the test suite.
  *
  * This is a deliberately small, read-only helper: it never writes MSRs.
  */
@@ -58,39 +67,96 @@ cat > "$T/readoc.c" <<'READOC_C'
 
 enum out_fmt { FMT_UDEC, FMT_HEX, FMT_HEX_UPPER };
 
+#define MAX_CPUS 8192
+#define MAX_REGS 64
+
 static void usage(const char *prog)
 {
 	fprintf(stderr,
-		"Usage: %s [-p cpu] [-f high:low] [-u|-x|-X] regno\n"
-		"  -p cpu        CPU number to read from (default 0)\n"
-		"  -f high:low   extract bitfield [high:low] only\n"
+		"Usage: %s [-p cpu[,cpu|a-b]...] [-f high:low] [-u|-x|-X] regno[,regno...]\n"
+		"  -p cpus       CPU number, or list/ranges e.g. 0-27 or 0,4,8-11 (default 0)\n"
+		"  -f high:low   extract bitfield [high:low] only (single mode)\n"
 		"  -u            unsigned decimal output (default)\n"
 		"  -x            hexadecimal output (lower case)\n"
 		"  -X            hexadecimal output (upper case)\n"
 		"  -V            print version\n"
-		"  -h            print this help\n",
+		"  -h            print this help\n"
+		"With multiple cpu/register pairs, prints one line per readable pair:\n"
+		"  <cpu> <0xreg> <value>\n",
 		prog);
+}
+
+static int parse_cpu_list(const char *s, int *out, int max)
+{
+	int n = 0;
+	while (*s) {
+		char *end;
+		long a = strtol(s, &end, 0);
+		if (end == s || a < 0 || a >= MAX_CPUS)
+			return -1;
+		long b = a;
+		if (*end == '-') {
+			s = end + 1;
+			b = strtol(s, &end, 0);
+			if (end == s || b < a || b >= MAX_CPUS)
+				return -1;
+		}
+		for (long v = a; v <= b; v++) {
+			if (n >= max)
+				return -1;
+			out[n++] = (int)v;
+		}
+		if (*end == ',')
+			s = end + 1;
+		else if (*end == '\0')
+			s = end;
+		else
+			return -1;
+	}
+	return n;
+}
+
+static int parse_reg_list(const char *s, uint32_t *out, int max)
+{
+	int n = 0;
+	while (*s) {
+		char *end;
+		unsigned long v = strtoul(s, &end, 0);
+		if (end == s)
+			return -1;
+		if (n >= max)
+			return -1;
+		out[n++] = (uint32_t)v;
+		if (*end == ',')
+			s = end + 1;
+		else if (*end == '\0')
+			s = end;
+		else
+			return -1;
+	}
+	return n;
 }
 
 int main(int argc, char *argv[])
 {
-	int cpu = 0;
+	static int cpus[MAX_CPUS];
+	static uint32_t regs[MAX_REGS];
+	int ncpu = 1;
 	unsigned hi = 63, lo = 0;
 	enum out_fmt fmt = FMT_UDEC;
 	int c;
 
+	cpus[0] = 0;
+
 	while ((c = getopt(argc, argv, "p:f:uxXVh")) != -1) {
 		switch (c) {
-		case 'p': {
-			char *end;
-			long v = strtol(optarg, &end, 0);
-			if (*end || v < 0 || v > 8191) {
+		case 'p':
+			ncpu = parse_cpu_list(optarg, cpus, MAX_CPUS);
+			if (ncpu < 1) {
 				usage(argv[0]);
 				return 127;
 			}
-			cpu = (int)v;
 			break;
-		}
 		case 'f':
 			if (sscanf(optarg, "%u:%u", &hi, &lo) != 2 ||
 			    hi > 63 || lo > hi) {
@@ -118,42 +184,75 @@ int main(int argc, char *argv[])
 		return 127;
 	}
 
-	uint32_t reg = (uint32_t)strtoul(argv[optind], NULL, 0);
-
-	char path[64];
-	snprintf(path, sizeof(path), "/dev/cpu/%d/msr", cpu);
-
-	int fd = open(path, O_RDONLY);
-	if (fd < 0) {
-		fprintf(stderr, "readoc: cannot open %s: %s\n",
-			path, strerror(errno));
-		return 2;
+	int nreg = parse_reg_list(argv[optind], regs, MAX_REGS);
+	if (nreg < 1) {
+		usage(argv[0]);
+		return 127;
 	}
 
-	uint64_t val;
-	if (pread(fd, &val, sizeof(val), reg) != (ssize_t)sizeof(val)) {
-		fprintf(stderr, "readoc: cannot read MSR 0x%" PRIx32
-			" on cpu %d: %s\n", reg, cpu, strerror(errno));
+	const char *devfmt = getenv("READOC_DEV");
+	if (!devfmt || !*devfmt)
+		devfmt = "/dev/cpu/%d/msr";
+
+	/* single mode: exactly one cpu and one register, legacy output */
+	if (ncpu == 1 && nreg == 1) {
+		char path[256];
+		snprintf(path, sizeof(path), devfmt, cpus[0]);
+
+		int fd = open(path, O_RDONLY);
+		if (fd < 0) {
+			fprintf(stderr, "readoc: cannot open %s: %s\n",
+				path, strerror(errno));
+			return 2;
+		}
+
+		uint64_t val;
+		if (pread(fd, &val, sizeof(val), regs[0]) !=
+		    (ssize_t)sizeof(val)) {
+			fprintf(stderr, "readoc: cannot read MSR 0x%" PRIx32
+				" on cpu %d: %s\n", regs[0], cpus[0],
+				strerror(errno));
+			close(fd);
+			return 4;
+		}
 		close(fd);
-		return 4;
-	}
-	close(fd);
 
-	/* extract bitfield if narrower than the full 64 bits */
-	unsigned width = hi - lo + 1;
-	if (width < 64) {
-		val >>= lo;
-		val &= (UINT64_C(1) << width) - 1;
+		/* extract bitfield if narrower than the full 64 bits */
+		unsigned width = hi - lo + 1;
+		if (width < 64) {
+			val >>= lo;
+			val &= (UINT64_C(1) << width) - 1;
+		}
+
+		switch (fmt) {
+		case FMT_HEX:       printf("%" PRIx64 "\n", val); break;
+		case FMT_HEX_UPPER: printf("%" PRIX64 "\n", val); break;
+		case FMT_UDEC:
+		default:            printf("%" PRIu64 "\n", val); break;
+		}
+		return 0;
 	}
 
-	switch (fmt) {
-	case FMT_HEX:       printf("%" PRIx64 "\n", val); break;
-	case FMT_HEX_UPPER: printf("%" PRIX64 "\n", val); break;
-	case FMT_UDEC:
-	default:            printf("%" PRIu64 "\n", val); break;
+	/* batch mode: one line per readable cpu/register pair */
+	int printed = 0;
+	for (int i = 0; i < ncpu; i++) {
+		char path[256];
+		snprintf(path, sizeof(path), devfmt, cpus[i]);
+		int fd = open(path, O_RDONLY);
+		if (fd < 0)
+			continue;
+		for (int j = 0; j < nreg; j++) {
+			uint64_t val;
+			if (pread(fd, &val, sizeof(val), regs[j]) !=
+			    (ssize_t)sizeof(val))
+				continue;
+			printf("%d 0x%" PRIx32 " %" PRIu64 "\n",
+			       cpus[i], regs[j], val);
+			printed++;
+		}
+		close(fd);
 	}
-
-	return 0;
+	return printed ? 0 : 4;
 }
 READOC_C
 gcc -I"$T" -Wall -O2 -D_GNU_SOURCE -D_FILE_OFFSET_BITS=64 "$T/readoc.c" -o /usr/local/bin/readoc
@@ -372,13 +471,20 @@ cat > /usr/local/bin/sckoc <<'MSR_SH'
 #!/bin/bash
 # SPDX-License-Identifier: GPL-2.0-only
 # sckoc: Intel/AMD read-only hardware monitor (no writes)
-MSRVER=2.2.1
+MSRVER=2.3.0
 set -e
 LIBEXEC=/usr/libexec/sckoc
 READOC="${READOC:-$( [ -x "$LIBEXEC/readoc" ] && echo "$LIBEXEC/readoc" || command -v readoc || echo /usr/local/bin/readoc )}"
 INT="${INT:-1}"
 rf(){ "$READOC" -p "$1" -u "$2" 2>/dev/null || echo 0; }
 bits(){ echo $(( ($1 >> $2) & ((1 << $3) - 1) )); }
+# unified sampling snapshots: SNAP["cpu:reg:phase"]=value, filled by ONE batched
+# readoc invocation per (cpu set, phase). Register keys use readoc's canonical
+# lower-case hex. Unreadable pairs simply have no key (sk tests presence).
+declare -A SNAP
+snap_load(){ local c r v; while read -r c r v; do case "$v" in ''|*[!0-9]*) continue ;; esac; SNAP["$c:$r:$3"]=$v; done < <("$READOC" -p "$1" "$2" 2>/dev/null); }
+sv(){ printf '%s' "${SNAP["$1:$2:$3"]:-0}"; }
+sk(){ [ -n "${SNAP["$1:$2:$3"]+x}" ]; }
 
 # --- ryzen_smu PM-table fallback (read-only) ---------------------------------
 # Consumer Ryzen has no HSMP, and pre-6.x kernels lack fam-1Ah k10temp; the
@@ -406,9 +512,9 @@ usage(){
 sckoc $MSRVER - read-only MSR/HSMP hardware monitor for Intel & AMD
 
 USAGE:
-  sckoc [mon]              full monitor panel (default when no argument)
+  sckoc [mon] [--json]     full monitor panel (default; --json = machine v1)
   sckoc vcore             per-core / per-rail core voltage
-  sckoc uncore            uncore/mesh frequency limits incl. BIOS boot values (Intel)
+  sckoc uncore [--json]   uncore/mesh frequency limits incl. BIOS boot values (Intel)
   sckoc dump <reg> [hi:lo]  read an MSR on every socket, optional bitfield
   sckoc uninstall [-y]    remove sckoc (auto-detects script/rpm/deb install)
   sckoc version | -V      print version
@@ -430,7 +536,10 @@ EXAMPLES:
 
 NOTES:
   Root required. Reads only - never writes MSRs (Secure Boot / lockdown safe).
-  Intel needs the msr module. AMD FCLK/PPT need /dev/hsmp (amd_hsmp or hsmp_acpi
+  Intel needs the msr module; 'sckoc uncore' alone also works without it when
+  the intel-uncore-frequency sysfs driver is present (kernel 6.5+, EL9 backport).
+  Per-core rows within 10°C of TjMax are flagged with '!'.
+  AMD FCLK/PPT need /dev/hsmp (amd_hsmp or hsmp_acpi
   plus BIOS HSMP). AMD temperature needs k10temp. Voltage rails need a board
   Super I/O driver (nct6775 etc). On consumer Ryzen (no HSMP) or old kernels
   (no fam-1Ah k10temp), the out-of-tree ryzen_smu driver is used as a read-only
@@ -482,7 +591,10 @@ case "${1:-}" in
     exit 0 ;;
 esac
 
-[ -e /dev/cpu/0/msr ] || { echo "msr module not loaded, run: sudo modprobe msr"; exit 1; }
+case "${1:-mon}" in
+  uncore) ;;  # sysfs path needs no msr module; MSR/TPMI fallbacks degrade on their own
+  *) [ -e /dev/cpu/0/msr ] || { echo "msr module not loaded, run: sudo modprobe msr"; exit 1; } ;;
+esac
 CPUROOT="${CPUROOT:-/sys/devices/system/cpu}"
 VEN="${MSRVEN:-$(awk '/vendor_id/{print $3;exit}' /proc/cpuinfo)}"
 FAM="${MSRFAM:-$(awk '/cpu family/{print $4;exit}' /proc/cpuinfo)}"
@@ -636,15 +748,20 @@ intel_uncore(){
 # TPMI fallback paths carry no boot values (a single register, overwritten in
 # place) - those columns show "-" there.
 uncore_cmd(){
-  [ "$VEN" = GenuineIntel ] || { echo "uncore: Intel-only (AMD fabric clock appears in the monitor as FCLK)"; exit 1; }
+  local JS=""; [ "${1:-}" = "--json" ] && JS=1
+  if [ "$VEN" != GenuineIntel ]; then
+    [ -n "$JS" ] && { printf '{"schema":"sckoc-uncore-v1","source":null,"domains":[]}\n'; exit 1; }
+    echo "uncore: Intel-only (AMD fabric clock appears in the monitor as FCLK)"; exit 1
+  fi
   [ -d "$UNC" ] || modprobe intel-uncore-frequency-tpmi 2>/dev/null || modprobe intel-uncore-frequency 2>/dev/null || true
   k2m(){ local v; if v=$(cat "$1" 2>/dev/null) && [ -n "$v" ]; then echo $((v/1000)); else echo "-"; fi; }
-  local shown="" chg="" d n pk cur mn mx imn imx star v621 v620 s c out tp
+  jn(){ case "$1" in ''|-|'?') printf null ;; *) printf '%s' "$1" ;; esac; }
+  local shown="" chg="" src="" JOUT="" d n pk cur mn mx imn imx star v621 v620 s c out tp
   if [ -d "$UNC" ]; then
     for d in "$UNC"/uncore* "$UNC"/package_*_die_*; do
       [ -e "$d/min_freq_khz" ] || continue
-      [ -n "$shown" ] || { echo "== Uncore/mesh frequency limits, MHz (sysfs) =="
-        printf "  %-19s %-4s %-8s %-6s %-6s %-9s %-9s\n" Domain Pkg Current Min Max BIOS-Min BIOS-Max; }
+      if [ -z "$shown" ] && [ -z "$JS" ]; then echo "== Uncore/mesh frequency limits, MHz (sysfs) =="
+        printf "  %-19s %-4s %-8s %-6s %-6s %-9s %-9s\n" Domain Pkg Current Min Max BIOS-Min BIOS-Max; fi
       n=${d##*/}
       if ! pk=$(cat "$d/package_id" 2>/dev/null); then
         case $n in package_*) pk=${n#package_}; pk=$((10#${pk%%_*})) ;; *) pk="?" ;; esac
@@ -653,10 +770,14 @@ uncore_cmd(){
       imn=$(k2m "$d/initial_min_freq_khz"); imx=$(k2m "$d/initial_max_freq_khz")
       star=""
       if [ "$imn" != "-" ] && { [ "$mn" != "$imn" ] || [ "$mx" != "$imx" ]; }; then star=" *"; chg=y; fi
-      printf "  %-19s %-4s %-8s %-6s %-6s %-9s %-9s%s\n" "$n" "$pk" "$cur" "$mn" "$mx" "$imn" "$imx" "$star"
-      shown=y
+      if [ -n "$JS" ]; then
+        JOUT="$JOUT${JOUT:+,}{\"name\":\"$n\",\"pkg\":$(jn "$pk"),\"current_mhz\":$(jn "$cur"),\"min_mhz\":$(jn "$mn"),\"max_mhz\":$(jn "$mx"),\"bios_min_mhz\":$(jn "$imn"),\"bios_max_mhz\":$(jn "$imx"),\"changed\":$( [ -n "$star" ] && printf true || printf false )}"
+      else
+        printf "  %-19s %-4s %-8s %-6s %-6s %-9s %-9s%s\n" "$n" "$pk" "$cur" "$mn" "$mx" "$imn" "$imx" "$star"
+      fi
+      shown=y; src=sysfs
     done
-    [ -n "$chg" ] && echo "  * Min/Max differ from the BIOS boot values (changed at runtime)"
+    [ -z "$JS" ] && [ -n "$chg" ] && echo "  * Min/Max differ from the BIOS boot values (changed at runtime)" || true
   fi
   if [ -z "$shown" ]; then
     # pre-TPMI Xeon fallback: MSR 0x621 current, 0x620 min/max limits
@@ -664,25 +785,39 @@ uncore_cmd(){
       c=${REP[$s]}
       v621=$("$READOC" -p "$c" -u 0x621 2>/dev/null) || continue
       cur=$(( (v621 & 127) * 100 )); [ "$cur" -gt 0 ] || continue
-      [ -n "$shown" ] || { echo "== Uncore/mesh frequency limits, MHz (MSR 0x620/0x621; no boot values via MSR) =="
-        printf "  %-7s %-8s %-6s %-6s %-9s %-9s\n" Socket Current Min Max BIOS-Min BIOS-Max; }
+      if [ -z "$shown" ] && [ -z "$JS" ]; then echo "== Uncore/mesh frequency limits, MHz (MSR 0x620/0x621; no boot values via MSR) =="
+        printf "  %-7s %-8s %-6s %-6s %-9s %-9s\n" Socket Current Min Max BIOS-Min BIOS-Max; fi
       v620=$(rf "$c" 0x620)
-      printf "  S%-6s %-8s %-6s %-6s %-9s %-9s\n" "$s" "$cur" "$(( $(bits "$v620" 8 7) * 100 ))" "$(( $(bits "$v620" 0 7) * 100 ))" - -
-      shown=y
+      mn=$(( $(bits "$v620" 8 7) * 100 )); mx=$(( $(bits "$v620" 0 7) * 100 ))
+      if [ -n "$JS" ]; then
+        JOUT="$JOUT${JOUT:+,}{\"name\":\"S$s\",\"pkg\":$s,\"current_mhz\":$cur,\"min_mhz\":$mn,\"max_mhz\":$mx,\"bios_min_mhz\":null,\"bios_max_mhz\":null,\"changed\":null}"
+      else
+        printf "  S%-6s %-8s %-6s %-6s %-9s %-9s\n" "$s" "$cur" "$mn" "$mx" - -
+      fi
+      shown=y; src=msr
     done
   fi
   if [ -z "$shown" ]; then
     # TPMI-era Xeon on pre-6.5 kernels: read-only tpmi-uncore helper
     tp="${TPMIU:-$( [ -x "$LIBEXEC/tpmi-uncore" ] && echo "$LIBEXEC/tpmi-uncore" || command -v tpmi-uncore || echo /usr/local/bin/tpmi-uncore )}"
     if [ -x "$tp" ] && out=$("$tp" 2>/dev/null) && [ -n "$out" ]; then
-      echo "== Uncore/mesh frequency limits, MHz (TPMI MMIO; no boot values via TPMI) =="
-      printf "  %-7s %-8s %-6s %-6s %-9s %-9s\n" Pkg Current Min Max BIOS-Min BIOS-Max
+      if [ -z "$JS" ]; then echo "== Uncore/mesh frequency limits, MHz (TPMI MMIO; no boot values via TPMI) =="
+        printf "  %-7s %-8s %-6s %-6s %-9s %-9s\n" Pkg Current Min Max BIOS-Min BIOS-Max; fi
       while read -r pk cur mn mx; do
         [ -n "$pk" ] || continue
-        printf "  S%-6s %-8s %-6s %-6s %-9s %-9s\n" "$pk" "$cur" "$mn" "$mx" - -
+        if [ -n "$JS" ]; then
+          JOUT="$JOUT${JOUT:+,}{\"name\":\"S$pk\",\"pkg\":$pk,\"current_mhz\":$cur,\"min_mhz\":$mn,\"max_mhz\":$mx,\"bios_min_mhz\":null,\"bios_max_mhz\":null,\"changed\":null}"
+        else
+          printf "  S%-6s %-8s %-6s %-6s %-9s %-9s\n" "$pk" "$cur" "$mn" "$mx" - -
+        fi
+        shown=y; src=tpmi
       done <<< "$out"
-      shown=y
     fi
+  fi
+  if [ -n "$JS" ]; then
+    printf '{"schema":"sckoc-uncore-v1","source":%s,"domains":[%s]}\n' "$( [ -n "$src" ] && printf '"%s"' "$src" || printf null )" "$JOUT"
+    [ -n "$shown" ] || exit 1
+    return
   fi
   [ -n "$shown" ] || { echo "uncore: no data (need intel-uncore-frequency driver, readable MSR 0x620/0x621, or tpmi-uncore helper)"; exit 1; }
 }
@@ -709,7 +844,7 @@ cpu_model_block(){
   done
 }
 intel_sock(){
-  local c=$2 v198 v19c v610 eu pu e1 e2 d1 d2 de dd tj base pl1 pl2 en thr
+  local c=$2 v198 v19c v610 eu pu e1 e2 d1 d2 de dd tj base pl1 pl2 thr
   tj=$(bits "$(rf "$c" 0x1A2)" 16 8); base=$(bits "$(rf "$c" 0xCE)" 8 8)
   eu=$(bits "$(rf "$c" 0x606)" 8 5);  pu=$(bits "$(rf "$c" 0x606)" 0 4)
   v610=$(rf "$c" 0x610)
@@ -718,22 +853,20 @@ intel_sock(){
   en1=$( [ "$(bits "$v610" 15 1)" = 1 ] && echo Enabled || echo Disabled)
   en2=$( [ "$(bits "$v610" 47 1)" = 1 ] && echo Enabled || echo Disabled)
   lk=$( [ "$(bits "$v610" 63 1)" = 1 ] && echo "  [PL Locked]" || : )
-  local ts1 ts2 p21="" p61="" pcs=""
-  ts1=$(rf "$c" 0x10)
-  p21=$("$READOC" -p "$c" -u 0x60D 2>/dev/null) || p21=""
-  p61=$("$READOC" -p "$c" -u 0x3F9 2>/dev/null) || p61=""
-  e1=$(bits "$(rf "$c" 0x611)" 0 32); d1=$(bits "$(rf "$c" 0x619)" 0 32)
-  sleep "$INT"
-  e2=$(bits "$(rf "$c" 0x611)" 0 32); d2=$(bits "$(rf "$c" 0x619)" 0 32)
-  ts2=$(rf "$c" 0x10); local dts=$(( ts2 - ts1 )); [ "$dts" -le 0 ] && dts=1
-  [ -n "$p21" ] && pcs="$pcs  PC2 $(( ($("$READOC" -p "$c" -u 0x60D 2>/dev/null || echo "$p21") - p21) * 100 / dts ))%" || true
-  [ -n "$p61" ] && pcs="$pcs  PC6 $(( ($("$READOC" -p "$c" -u 0x3F9 2>/dev/null || echo "$p61") - p61) * 100 / dts ))%" || true
+  # counters come from the shared sampling window (see mon_sample)
+  local ts1 ts2 dts pcs=""
+  ts1=$(sv "$c" 0x10 T0); ts2=$(sv "$c" 0x10 T1)
+  dts=$(( ts2 - ts1 )); [ "$dts" -le 0 ] && dts=1
+  sk "$c" 0x60d T0 && sk "$c" 0x60d T1 && pcs="$pcs  PC2 $(( ( $(sv "$c" 0x60d T1) - $(sv "$c" 0x60d T0) ) * 100 / dts ))%" || true
+  sk "$c" 0x3f9 T0 && sk "$c" 0x3f9 T1 && pcs="$pcs  PC6 $(( ( $(sv "$c" 0x3f9 T1) - $(sv "$c" 0x3f9 T0) ) * 100 / dts ))%" || true
+  e1=$(( $(sv "$c" 0x611 T0) & 4294967295 )); e2=$(( $(sv "$c" 0x611 T1) & 4294967295 ))
+  d1=$(( $(sv "$c" 0x619 T0) & 4294967295 )); d2=$(( $(sv "$c" 0x619 T1) & 4294967295 ))
   de=$(( e2>=e1 ? e2-e1 : e2-e1+4294967296 )); dd=$(( d2>=d1 ? d2-d1 : d2-d1+4294967296 ))
-  v198=$(rf "$c" 0x198); v19c=$(rf "$c" 0x19C)
+  v198=$(sv "$c" 0x198 T1); v19c=$(sv "$c" 0x19c T1)
   local mx=0 t cc
   for cc in $CPUS; do
     [ "$(cat "$CPUROOT/cpu$cc/topology/physical_package_id")" = "$1" ] || continue
-    t=$(( tj - $(bits "$(rf "$cc" 0x19C)" 16 7) )); [ "$t" -gt "$mx" ] && mx=$t || true
+    t=$(( tj - $(bits "$(sv "$cc" 0x19c T1)" 16 7) )); [ "$t" -gt "$mx" ] && mx=$t || true
   done
   local un; un=$(intel_uncore "$1" "$c")
   thr=""; [ "$(bits "$v19c" 0 1)" = 1 ] && thr="  [THROTTLING!]"; [ -z "$thr" ] && [ "$(bits "$v19c" 1 1)" = 1 ] && thr="  [Throttle-Log]"
@@ -799,7 +932,7 @@ amd_fclk(){
 amd_sock(){
   local c=$2 eu e1 e2 de
   eu=$(bits "$(rf "$c" 0xC0010299)" 8 5)
-  e1=$(bits "$(rf "$c" 0xC001029B)" 0 32); sleep "$INT"; e2=$(bits "$(rf "$c" 0xC001029B)" 0 32)
+  e1=$(( $(sv "$c" 0xc001029b T0) & 4294967295 )); e2=$(( $(sv "$c" 0xc001029b T1) & 4294967295 ))
   de=$(( e2>=e1 ? e2-e1 : e2-e1+4294967296 ))
   local ph="" ppt=""
   [ "$(hsmp_q 0x0B 1 "$1")" = 1 ] && ph="  [PROCHOT!]" || true
@@ -840,8 +973,8 @@ amd_sock(){
 }
 
 percore(){
-  local -A M1 A1 E1 TJ
-  local c base eu=0
+  local -A TJ
+  local c base eu=0 HOTANY=""
   for s in $SOCKETS; do TJ[$s]=$(bits "$(rf "${REP[$s]}" 0x1A2)" 16 8); done
   [ "$VEN" = AuthenticAMD ] && eu=$(bits "$(rf 0 0xC0010299)" 8 5)
   local -A CCD CCDT PKGMIN PKGSTEP TCTL
@@ -898,21 +1031,15 @@ percore(){
       fi
     fi
   fi
-  local -A T1 C61
   for c in $CPUS; do
-    M1[$c]=$(rf "$c" 0xE7); A1[$c]=$(rf "$c" 0xE8); T1[$c]=$(rf "$c" 0x10)
-    [ "$VEN" = GenuineIntel ] && C61[$c]=$(rf "$c" 0x3FD)
-    [ "$VEN" = AuthenticAMD ] && E1[$c]=$(bits "$(rf "$c" 0xC001029A)" 0 32)
-  done
-  sleep "$INT"
-  for c in $CPUS; do
-    local m2 a2 dm da bm=-1 sib extra=""
+    local dm da bm=-1 sib extra="" hot=""
     sib=$(siblings "$c")
     [ "$(echo "$sib" | head -1)" = "$c" ] || continue
-    local c0m=0 t2 dt c0
+    local c0m=0 dt c0
     for t in $sib; do
-      m2=$(rf "$t" 0xE7); a2=$(rf "$t" 0xE8); t2=$(rf "$t" 0x10)
-      dm=$(( m2 - M1[$t] )); da=$(( a2 - A1[$t] )); dt=$(( t2 - T1[$t] )); [ "$dt" -le 0 ] && dt=1
+      dm=$(( $(sv "$t" 0xe7 T1) - $(sv "$t" 0xe7 T0) ))
+      da=$(( $(sv "$t" 0xe8 T1) - $(sv "$t" 0xe8 T0) ))
+      dt=$(( $(sv "$t" 0x10 T1) - $(sv "$t" 0x10 T0) )); [ "$dt" -le 0 ] && dt=1
       c0=$(( dm * 100 / dt )); [ "$c0" -gt 100 ] && c0=100; [ "$c0" -gt "$c0m" ] && c0m=$c0 || true
       [ "$dm" -gt 0 ] && [ $(( da * 1000 / dm )) -gt "$bm" ] && { bm=$(( da * 1000 / dm )); } || true
     done
@@ -921,13 +1048,15 @@ percore(){
       base=$(bits "$(rf "$c" 0xCE)" 8 8)
       local pkg; pkg=$(cat "$CPUROOT/cpu$c/topology/physical_package_id")
       local c62 dc6 c6p
-      c62=$(rf "$c" 0x3FD); dc6=$(( c62 - C61[$c] )); [ "$dc6" -lt 0 ] && dc6=0
+      c62=$(sv "$c" 0x3fd T1); dc6=$(( c62 - $(sv "$c" 0x3fd T0) )); [ "$dc6" -lt 0 ] && dc6=0
       c6p=$(( dc6 * 100 / dt )); [ "$c6p" -gt 100 ] && c6p=100
-      extra="  $(printf '%3d' $(( TJ[$pkg] - $(bits "$(rf "$c" 0x19C)" 16 7) )))°C  $(wt4 "$(bits "$(rf "$c" 0x198)" 32 16)/8192") V  C0 $(printf '%3d' "$c0m")%  C6 $(printf '%3d' "$c6p")%"
+      local tc; tc=$(( TJ[$pkg] - $(bits "$(sv "$c" 0x19c T1)" 16 7) ))
+      [ "$tc" -ge $(( TJ[$pkg] - 10 )) ] && { hot=" !"; HOTANY=1; }
+      extra="  $(printf '%3d' "$tc")°C  $(wt4 "$(bits "$(sv "$c" 0x198 T1)" 32 16)/8192") V  C0 $(printf '%3d' "$c0m")%  C6 $(printf '%3d' "$c6p")%$hot"
     else
       base=$(( $(amd_p0 "$c") / 100 ))
-      local e2 dE; e2=$(bits "$(rf "$c" 0xC001029A)" 0 32)
-      dE=$(( e2>=E1[$c] ? e2-E1[$c] : e2-E1[$c]+4294967296 ))
+      local e2 e1a dE; e2=$(( $(sv "$c" 0xc001029a T1) & 4294967295 )); e1a=$(( $(sv "$c" 0xc001029a T0) & 4294967295 ))
+      dE=$(( e2>=e1a ? e2-e1a : e2-e1a+4294967296 ))
       local pk2 rel tp td cd step
       pk2=$(cat "$CPUROOT/cpu$c/topology/physical_package_id" 2>/dev/null || echo 0)
       step=${PKGSTEP[$pk2]:-1}; [ "$step" -lt 1 ] && step=1
@@ -944,10 +1073,34 @@ percore(){
     fi
     printf "  core%-3d %5d MHz%s\n" "$c" $(( base * 100 * bm / 1000 )) "$extra"
   done
+  { [ "$VEN" = GenuineIntel ] && [ -n "$HOTANY" ] && echo "  ! = within 10°C of TjMax"; } || true
 }
 
+# one shared sampling window for the whole panel: every time-delta counter
+# (aperf/mperf/tsc, C6/PC2/PC6 residency, package & DRAM/core energy) is read
+# for all CPUs in one batched readoc call at T0 and one at T1, with a single
+# sleep in between - instead of one sleep per socket plus one for the cores.
+mon_sample(){
+  local CPUL REPL s
+  CPUL=$(printf '%s,' $CPUS); CPUL=${CPUL%,}
+  REPL=$(for s in $SOCKETS; do printf '%s,' "${REP[$s]}"; done); REPL=${REPL%,}
+  if [ "$VEN" = GenuineIntel ]; then
+    snap_load "$CPUL" 0xe7,0xe8,0x10,0x3fd,0x19c,0x198 T0
+    snap_load "$REPL" 0x60d,0x3f9,0x611,0x619 T0
+    sleep "$INT"
+    snap_load "$CPUL" 0xe7,0xe8,0x10,0x3fd,0x19c,0x198 T1
+    snap_load "$REPL" 0x60d,0x3f9,0x611,0x619 T1
+  else
+    snap_load "$CPUL" 0xe7,0xe8,0x10,0xc001029a T0
+    snap_load "$REPL" 0xc001029b T0
+    sleep "$INT"
+    snap_load "$CPUL" 0xe7,0xe8,0x10,0xc001029a T1
+    snap_load "$REPL" 0xc001029b T1
+  fi
+}
 mon(){
   platform_info
+  mon_sample
   echo "== $VEN fam${FAM}  Per-socket Overview =="
   for s in $SOCKETS; do
     if [ "$VEN" = GenuineIntel ]; then intel_sock "$s" "${REP[$s]}"; else amd_sock "$s" "${REP[$s]}"; fi
@@ -972,9 +1125,74 @@ mon(){
   percore
 }
 
+# --json v1 (schema sckoc-mon-v1): machine-readable core subset of the panel.
+# Text-only extras (PL, PC-states, DRAM, mesh, throttle flags, board rails)
+# stay in the human panel; scripts get sockets + per-core essentials.
+mon_json(){
+  mon_sample
+  local first=1 s c p tj basec eu de e1 e2
+  printf '{"schema":"sckoc-mon-v1","version":"%s","vendor":"%s","family":%s,"interval_s":%s,"sockets":[' "$MSRVER" "$VEN" "$FAM" "$INT"
+  for s in $SOCKETS; do
+    c=${REP[$s]}
+    [ $first = 1 ] || printf ','
+    first=0
+    if [ "$VEN" = GenuineIntel ]; then
+      tj=$(bits "$(rf "$c" 0x1A2)" 16 8); basec=$(bits "$(rf "$c" 0xCE)" 8 8)
+      eu=$(bits "$(rf "$c" 0x606)" 8 5)
+      e1=$(( $(sv "$c" 0x611 T0) & 4294967295 )); e2=$(( $(sv "$c" 0x611 T1) & 4294967295 ))
+      de=$(( e2>=e1 ? e2-e1 : e2-e1+4294967296 ))
+      local mx=0 t cc v198
+      for cc in $CPUS; do
+        [ "$(cat "$CPUROOT/cpu$cc/topology/physical_package_id" 2>/dev/null)" = "$s" ] || continue
+        t=$(( tj - $(bits "$(sv "$cc" 0x19c T1)" 16 7) )); [ "$t" -gt "$mx" ] && mx=$t || true
+      done
+      v198=$(sv "$c" 0x198 T1)
+      printf '{"id":%s,"tjmax_c":%s,"temp_max_c":%s,"vid_v":%s,"core_mhz":%s,"base_mhz":%s,"pkg_w":%s}' \
+        "$s" "$tj" "$mx" "$(wt4 "$(bits "$v198" 32 16)/8192")" "$(( $(bits "$v198" 8 8) * 100 ))" "$(( basec * 100 ))" "$(wt "$de/2^$eu/$INT")"
+    else
+      eu=$(bits "$(rf "$c" 0xC0010299)" 8 5)
+      e1=$(( $(sv "$c" 0xc001029b T0) & 4294967295 )); e2=$(( $(sv "$c" 0xc001029b T1) & 4294967295 ))
+      de=$(( e2>=e1 ? e2-e1 : e2-e1+4294967296 ))
+      printf '{"id":%s,"pkg_w":%s}' "$s" "$(wt "$de/2^$eu/$INT")"
+    fi
+  done
+  printf '],"cores":['
+  first=1
+  for c in $CPUS; do
+    local sib dm da dt bm=-1 c0m=0 c0 t
+    sib=$(siblings "$c")
+    [ "$(echo "$sib" | head -1)" = "$c" ] || continue
+    for t in $sib; do
+      dm=$(( $(sv "$t" 0xe7 T1) - $(sv "$t" 0xe7 T0) ))
+      da=$(( $(sv "$t" 0xe8 T1) - $(sv "$t" 0xe8 T0) ))
+      dt=$(( $(sv "$t" 0x10 T1) - $(sv "$t" 0x10 T0) )); [ "$dt" -le 0 ] && dt=1
+      c0=$(( dm * 100 / dt )); [ "$c0" -gt 100 ] && c0=100; [ "$c0" -gt "$c0m" ] && c0m=$c0 || true
+      [ "$dm" -gt 0 ] && [ $(( da * 1000 / dm )) -gt "$bm" ] && bm=$(( da * 1000 / dm )) || true
+    done
+    [ "$bm" -lt 0 ] && continue
+    p=$(cat "$CPUROOT/cpu$c/topology/physical_package_id" 2>/dev/null || echo 0)
+    [ $first = 1 ] || printf ','
+    first=0
+    if [ "$VEN" = GenuineIntel ]; then
+      local bc tj2 c62 dc6 c6p
+      bc=$(bits "$(rf "$c" 0xCE)" 8 8)
+      tj2=$(bits "$(rf "${REP[$p]}" 0x1A2)" 16 8)
+      c62=$(sv "$c" 0x3fd T1); dc6=$(( c62 - $(sv "$c" 0x3fd T0) )); [ "$dc6" -lt 0 ] && dc6=0
+      c6p=$(( dc6 * 100 / dt )); [ "$c6p" -gt 100 ] && c6p=100
+      printf '{"cpu":%s,"socket":%s,"mhz":%s,"temp_c":%s,"vid_v":%s,"c0_pct":%s,"c6_pct":%s}' \
+        "$c" "$p" $(( bc * 100 * bm / 1000 )) "$(( tj2 - $(bits "$(sv "$c" 0x19c T1)" 16 7) ))" "$(wt4 "$(bits "$(sv "$c" 0x198 T1)" 32 16)/8192")" "$c0m" "$c6p"
+    else
+      local bc; bc=$(( $(amd_p0 "$c") / 100 ))
+      printf '{"cpu":%s,"socket":%s,"mhz":%s,"c0_pct":%s}' "$c" "$p" $(( bc * 100 * bm / 1000 )) "$c0m"
+    fi
+  done
+  printf ']}\n'
+}
+
 case "${1:-mon}" in
-  mon) mon ;;
-  uncore) uncore_cmd ;;
+  mon) if [ "${2:-}" = "--json" ]; then mon_json; else mon; fi ;;
+  --json) mon_json ;;
+  uncore) shift; uncore_cmd "$@" ;;
   dump) shift; for s in $SOCKETS; do
         printf "  S%s cpu%-3s = 0x%s\n" "$s" "${REP[$s]}" \
           "$("$READOC" -p "${REP[$s]}" ${2:+-f $2} -X "$1" 2>/dev/null)"; done ;;
@@ -1038,7 +1256,7 @@ _sckoc(){
   local cmd=${words[1]:-}
 
   if [ "$cword" -eq 1 ]; then
-    COMPREPLY=($(compgen -W "mon vcore uncore dump uninstall version help -V -h --help" -- "$cur"))
+    COMPREPLY=($(compgen -W "mon vcore uncore dump uninstall version help --json -V -h --help" -- "$cur"))
     return
   fi
 
@@ -1063,6 +1281,9 @@ _sckoc(){
         COMPREPLY=($(compgen -W "63:32 47:32 31:16 31:0 21:15 15:0 14:8 7:0 6:0" -- "$cur"))
         declare -F __ltrim_colon_completions >/dev/null 2>&1 && __ltrim_colon_completions "$cur"
       fi
+      return ;;
+    mon|uncore)
+      [ "$cword" -eq 2 ] && COMPREPLY=($(compgen -W "--json" -- "$cur"))
       return ;;
     uninstall)
       [ "$cword" -eq 2 ] && COMPREPLY=($(compgen -W "-y" -- "$cur"))

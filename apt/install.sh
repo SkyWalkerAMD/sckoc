@@ -22,10 +22,7 @@ command -v dmidecode >/dev/null || {
 T=$(mktemp -d); trap 'rm -rf "$T"' EXIT
 cat > "$T/version.h" <<'VER_H'
 /* SPDX-License-Identifier: GPL-2.0-only */
-#ifndef SCKOC_VERSION_H
-#define SCKOC_VERSION_H
-#define VERSION_STRING "2.3.0"
-#endif
+#define VERSION_STRING "2.6.0"
 VER_H
 cat > "$T/readoc.c" <<'READOC_C'
 // SPDX-License-Identifier: GPL-2.0-only
@@ -471,8 +468,12 @@ cat > /usr/local/bin/sckoc <<'MSR_SH'
 #!/bin/bash
 # SPDX-License-Identifier: GPL-2.0-only
 # sckoc: Intel/AMD read-only hardware monitor (no writes)
-MSRVER=2.3.0
-set -e
+MSRVER=2.6.0
+# No 'set -e': this is a read-only monitor built from many best-effort MSR
+# reads, and blocks use the `[ cond ] && action` idiom throughout (which
+# returns non-zero when the guard is false). Each block degrades on its own;
+# a missing reading must never abort the rest of the panel or report. Fatal
+# conditions are handled with explicit guarded exits instead.
 LIBEXEC=/usr/libexec/sckoc
 READOC="${READOC:-$( [ -x "$LIBEXEC/readoc" ] && echo "$LIBEXEC/readoc" || command -v readoc || echo /usr/local/bin/readoc )}"
 INT="${INT:-1}"
@@ -482,6 +483,7 @@ bits(){ echo $(( ($1 >> $2) & ((1 << $3) - 1) )); }
 # readoc invocation per (cpu set, phase). Register keys use readoc's canonical
 # lower-case hex. Unreadable pairs simply have no key (sk tests presence).
 declare -A SNAP
+declare -A BASEM   # per-socket base MHz, filled by mon() for the CPU block
 snap_load(){ local c r v; while read -r c r v; do case "$v" in ''|*[!0-9]*) continue ;; esac; SNAP["$c:$r:$3"]=$v; done < <("$READOC" -p "$1" "$2" 2>/dev/null); }
 sv(){ printf '%s' "${SNAP["$1:$2:$3"]:-0}"; }
 sk(){ [ -n "${SNAP["$1:$2:$3"]+x}" ]; }
@@ -512,13 +514,23 @@ usage(){
 sckoc $MSRVER - read-only MSR/HSMP hardware monitor for Intel & AMD
 
 USAGE:
-  sckoc [mon] [--json]     full monitor panel (default; --json = machine v1)
-  sckoc vcore             per-core / per-rail core voltage
-  sckoc uncore [--json]   uncore/mesh frequency limits incl. BIOS boot values (Intel)
-  sckoc dump <reg> [hi:lo]  read an MSR on every socket, optional bitfield
-  sckoc uninstall [-y]    remove sckoc (auto-detects script/rpm/deb install)
-  sckoc version | -V      print version
-  sckoc help | -h         this help
+  Overview
+    sckoc [mon] [--json]    key live metrics per socket and per core
+                            (--json = machine-readable document, schema v1)
+  Detail
+    sckoc info              static platform report: security state, CPU
+                            identity/ratio ceilings, turbo bins, thermal,
+                            power limits + envelope, per-DIMM memory, cache
+    sckoc vid               per-core VID / per-rail voltage (Intel: requested
+                            regulator target, not measured; AMD: measured
+                            board/SMU rails where available)
+    sckoc uncore [--json]   uncore/mesh frequency limits: Current, Min/Max
+                            and the BIOS boot values (Intel)
+    sckoc dump <reg> [hi:lo]  read an MSR on every socket, optional bitfield
+  Maintenance
+    sckoc uninstall [-y]    remove sckoc (auto-detects script/rpm/deb install)
+    sckoc version | -V      print version
+    sckoc help | -h         this help
 
 ENVIRONMENT:
   INT=<sec>                 sampling window for freq/power/C0 (default 1)
@@ -528,16 +540,21 @@ EXAMPLES:
   sudo sckoc                       # one-shot overview
   sudo INT=2 sckoc                 # 2-second sampling window
   sudo watch -n 3 sckoc            # refresh every 3 s
-  sudo sckoc vcore                 # core voltage per core / rail
+  sudo sckoc info                  # platform config + power limits
+  sudo sckoc vid                   # per-core VID / rail voltage
   sudo sckoc uncore                # mesh/uncore limits + BIOS boot values
   sudo sckoc dump 0x198 47:32      # Intel core VID field, all sockets
   sudo sckoc dump 0xC0010064       # AMD P-state 0 definition
   sudo sckoc uninstall -y          # remove without prompt
 
 NOTES:
+  The monitor panel deliberately shows key live data only; static platform
+  configuration and per-topic detail live in the Detail commands above.
+  'vcore' is accepted as a deprecated alias of 'vid'.
   Root required. Reads only - never writes MSRs (Secure Boot / lockdown safe).
-  Intel needs the msr module; 'sckoc uncore' alone also works without it when
-  the intel-uncore-frequency sysfs driver is present (kernel 6.5+, EL9 backport).
+  Intel needs the msr module; 'sckoc uncore' and 'sckoc info' also work
+  without it (uncore needs the intel-uncore-frequency sysfs driver, kernel
+  6.5+ / EL9 backport; info then omits the MSR-backed blocks).
   Per-core rows within 10°C of TjMax are flagged with '!'.
   AMD FCLK/PPT need /dev/hsmp (amd_hsmp or hsmp_acpi
   plus BIOS HSMP). AMD temperature needs k10temp. Voltage rails need a board
@@ -592,7 +609,7 @@ case "${1:-}" in
 esac
 
 case "${1:-mon}" in
-  uncore) ;;  # sysfs path needs no msr module; MSR/TPMI fallbacks degrade on their own
+  uncore|info) ;;  # sysfs/firmware paths need no msr module; MSR extras degrade on their own
   *) [ -e /dev/cpu/0/msr ] || { echo "msr module not loaded, run: sudo modprobe msr"; exit 1; } ;;
 esac
 CPUROOT="${CPUROOT:-/sys/devices/system/cpu}"
@@ -645,13 +662,19 @@ board_vcore(){
   done
   return 1
 }
-platform_info(){
-  local sb ld oc="" f
+# DRAM speed/voltage summary from SMBIOS; sets the global DRAMSPD used by the
+# per-socket rows.
+dram_speed(){
   DRAMSPD=$( (${DMI:-dmidecode} -t 17 2>/dev/null || :) | awk -F": " '
     /Configured Memory Speed: [0-9]/{spd=$2}
     /Configured Voltage:/{ if(spd!=""){ v=($2 ~ /^[0-9]/) ? " @ " $2 : ""; c[spd v]++; spd="" } }
     END{n=0; for(k in c){printf "%s%s (%d DIMMs)",(n++?", ":""),k,c[k]}}')
   [ -z "$DRAMSPD" ] && DRAMSPD="N/A (need dmidecode)"
+}
+# platform configuration line (static: firmware/kernel security + topology).
+# Shown by 'sckoc info', not by the monitor panel.
+platform_line(){
+  local sb ld oc="" f
   f=$(ls "${SBDIR:-/sys/firmware/efi/efivars}"/SecureBoot-* 2>/dev/null | head -1)
   if [ -n "$f" ]; then
     sb=$( [ "$(od -An -tu1 "$f" 2>/dev/null | awk "{v=\$NF} END{print v}")" = 1 ] && echo Enabled || echo Disabled)
@@ -679,7 +702,10 @@ platform_info(){
   fi
   echo "== Platform =="
   printf "  Secure Boot %s  Lockdown %s%s  %s %s  NUMA %s node(s)%s\n" "$sb" "$ld" "$oc" "$smtlab" "$smt" "$numa" "$smu"
-  local h n lab v out=""
+}
+# board voltage rails (Super I/O sensors) - live data, stays on the monitor.
+board_rails(){
+  local h n lab v f out=""
   for h in /sys/class/hwmon/hwmon*; do
     n=$(cat "$h/name" 2>/dev/null) || continue
     case "$n" in nct*|it87*|asus*|w83*) ;; *) continue ;; esac
@@ -691,6 +717,184 @@ platform_info(){
     done
   done
   [ -n "$out" ] && printf "  Rails: %s\n" "$out" || :
+}
+# RAPL time-window field -> seconds. $1=Y (exp, 5 bits), $2=Z (mantissa, 2
+# bits), $3=time unit exponent (0x606[19:16]); window = (1+Z/4)*2^Y / 2^unit.
+rapl_win(){ awk "BEGIN{printf \"%.3f\", (1 + $2/4) * 2^$1 / 2^$3}"; }
+
+# CPU identity + configured ratio ceilings, per socket. Intel decodes
+# 0xCE (MSR_PLATFORM_INFO): base (max non-turbo), max-efficiency and min
+# operating ratios plus the "programmable" flags that say what BIOS/OC may
+# change. AMD lists the enabled P-state base clocks.
+info_cpu(){
+  echo "== CPU =="
+  local s c mn md st uc cor thr cc v
+  for s in $SOCKETS; do
+    c=${REP[$s]}
+    mn=$(awk -F':[ \t]*' -v p="$c" '$1 ~ /^processor/{cur=$2+0} cur==p && $1 ~ /^model name/{print $2; exit}' /proc/cpuinfo)
+    md=$(awk -F':[ \t]*' -v p="$c" '$1 ~ /^processor/{cur=$2+0} cur==p && $1 ~ /^model[ \t]*$/{print $2; exit}' /proc/cpuinfo)
+    st=$(awk -F':[ \t]*' -v p="$c" '$1 ~ /^processor/{cur=$2+0} cur==p && $1 ~ /^stepping/{print $2; exit}' /proc/cpuinfo)
+    uc=$(awk -F':[ \t]*' -v p="$c" '$1 ~ /^processor/{cur=$2+0} cur==p && $1 ~ /^microcode/{print $2; exit}' /proc/cpuinfo)
+    thr=0; cor=0
+    for cc in $CPUS; do
+      [ "$(cat "$CPUROOT/cpu$cc/topology/physical_package_id" 2>/dev/null)" = "$s" ] || continue
+      thr=$((thr+1)); [ "$(siblings "$cc" | head -1)" = "$cc" ] && cor=$((cor+1))
+    done
+    printf "  S%s  %s  %sC/%sT  fam%s model %s stepping %s%s\n" \
+      "$s" "${mn:-unknown}" "$cor" "$thr" "$FAM" "${md:--}" "${st:--}" "${uc:+  ucode $uc}"
+    if [ "$VEN" = GenuineIntel ]; then
+      if v=$("$READOC" -p "$c" -u 0xCE 2>/dev/null); then
+        printf "      Base %sx (%d MHz)  Max-Eff %sx  Min %sx\n" \
+          "$(bits "$v" 8 8)" "$(( $(bits "$v" 8 8) * 100 ))" "$(bits "$v" 40 8)" "$(bits "$v" 48 8)"
+        printf "      Programmable: turbo-ratio %s  TDP-limit %s  TjMax-offset %s\n" \
+          "$( [ "$(bits "$v" 28 1)" = 1 ] && echo yes || echo no)" \
+          "$( [ "$(bits "$v" 29 1)" = 1 ] && echo yes || echo no)" \
+          "$( [ "$(bits "$v" 30 1)" = 1 ] && echo yes || echo no)"
+      fi
+    else
+      local ps reg pv line=""
+      for ps in 0 1 2; do
+        reg=$(printf '0x%X' $(( 0xC0010064 + ps )))
+        pv=$("$READOC" -p "$c" -u "$reg" 2>/dev/null) || continue
+        [ "$(bits "$pv" 63 1)" = 1 ] || continue
+        if [ "$FAM" -ge 26 ]; then line="$line  P$ps $(( (pv & 0xFFF) * 5 )) MHz"
+        else local f=$((pv & 0xFF)) d=$(( (pv>>8) & 0x3F )); [ "$d" -eq 0 ] && d=8; line="$line  P$ps $(( f*200/d )) MHz"; fi
+      done
+      [ -n "$line" ] && printf "     %s\n" "$line"
+    fi
+  done
+  return 0
+}
+
+# Intel turbo ratio limits: 0x1AD holds up to 8 max-ratio bins, 0x1AE the
+# active-core-count threshold each bin applies up to (Skylake-SP+ scheme).
+# Ratios are package-uniform, so this shows socket 0. Falls back to a bin
+# index when 0x1AE is unavailable/implausible.
+info_turbo(){
+  [ "$VEN" = GenuineIntel ] || return 0
+  local c i r n rl rc out="" ncpu cnt=0 last=""
+  c=${REP[$(printf '%s\n' $SOCKETS | head -1)]}
+  rl=$("$READOC" -p "$c" -u 0x1AD 2>/dev/null) || return 0
+  rc=$("$READOC" -p "$c" -u 0x1AE 2>/dev/null) || rc=""
+  ncpu=$(printf '%s\n' $CPUS | wc -l)
+  for i in 0 1 2 3 4 5 6 7; do
+    r=$(bits "$rl" $((i*8)) 8); [ "$r" -gt 0 ] || continue
+    cnt=$((cnt+1)); last="${r}x"
+    n=""; [ -n "$rc" ] && n=$(bits "$rc" $((i*8)) 8)
+    case "$n" in ''|0) out="$out  bin$i ${r}x" ;; *) [ "$n" -le "$ncpu" ] && out="$out  <=${n}C ${r}x" || out="$out  bin$i ${r}x" ;; esac
+  done
+  [ "$cnt" = 0 ] && return 0
+  echo "== Turbo Ratio Limits (0x1AD/0x1AE) =="
+  # a single populated bin has no per-core-count structure to show, so print
+  # the ratio bare; multiple bins keep their <=NC (or binN fallback) labels.
+  if [ "$cnt" = 1 ]; then printf "      %s\n" "$last"; else printf "    %s\n" "$out"; fi
+  return 0
+}
+
+# Intel thermal config: TjMax and the TCC/PROCHOT activation offset (0x1A2).
+info_thermal(){
+  [ "$VEN" = GenuineIntel ] || return 0
+  local s c v shown=""
+  for s in $SOCKETS; do
+    c=${REP[$s]}
+    v=$("$READOC" -p "$c" -u 0x1A2 2>/dev/null) || continue
+    [ -z "$shown" ] && { echo "== Thermal =="; shown=y; }
+    printf "  S%s  TjMax %d°C  TCC/PROCHOT offset %d°C\n" "$s" "$(bits "$v" 16 8)" "$(bits "$v" 24 6)"
+  done
+  return 0
+}
+
+# Intel power: PL1/PL2 with enable, time window and lock (0x610), plus the
+# package power envelope TDP/Min/Max/window (0x614 PKG_POWER_INFO).
+intel_power(){
+  local s c v606 v610 v614 pu tu shown=""
+  echo "== Power Limits (RAPL) =="
+  for s in $SOCKETS; do
+    c=${REP[$s]}
+    v606=$("$READOC" -p "$c" -u 0x606 2>/dev/null) || continue
+    v610=$("$READOC" -p "$c" -u 0x610 2>/dev/null) || continue
+    pu=$(bits "$v606" 0 4); tu=$(bits "$v606" 16 4)
+    printf "  S%s  PL1 %s W (%s, %s s)  PL2 %s W (%s, %s s)%s\n" "$s" \
+      "$(wt "$(bits "$v610" 0 15)/2^$pu")" \
+      "$( [ "$(bits "$v610" 15 1)" = 1 ] && echo Enabled || echo Disabled)" \
+      "$(rapl_win "$(bits "$v610" 17 5)" "$(bits "$v610" 22 2)" "$tu")" \
+      "$(wt "$(bits "$v610" 32 15)/2^$pu")" \
+      "$( [ "$(bits "$v610" 47 1)" = 1 ] && echo Enabled || echo Disabled)" \
+      "$(rapl_win "$(bits "$v610" 49 5)" "$(bits "$v610" 54 2)" "$tu")" \
+      "$( [ "$(bits "$v610" 63 1)" = 1 ] && echo "  [Locked]" || : )"
+    if v614=$("$READOC" -p "$c" -u 0x614 2>/dev/null) && [ "$(bits "$v614" 0 15)" -gt 0 ]; then
+      local pmin pmax line
+      pmin=$(bits "$v614" 16 15); pmax=$(bits "$v614" 32 15)
+      line="        Package: TDP $(wt "$(bits "$v614" 0 15)/2^$pu") W"
+      [ "$pmin" -gt 0 ] && line="$line  Min $(wt "$pmin/2^$pu") W"
+      [ "$pmax" -gt 0 ] && line="$line  Max $(wt "$pmax/2^$pu") W  Max window $(rapl_win "$(bits "$v614" 48 5)" "$(bits "$v614" 53 2)" "$tu") s"
+      printf '%s\n' "$line"
+    fi
+    shown=y
+  done
+  [ -n "$shown" ] || echo "  N/A (need msr module: sudo modprobe msr)"
+  return 0
+}
+
+# AMD power: PPT limit (and its max) from HSMP, where available.
+amd_power(){
+  local s pl plm shown=""
+  for s in $SOCKETS; do
+    pl=$(hsmp_q 0x06 1 "$s") || continue
+    plm=$(hsmp_q 0x07 1 "$s") || plm=""
+    [ -z "$shown" ] && { echo "== Power Limits (HSMP) =="; shown=y; }
+    printf "  S%s  PPT %s W%s\n" "$s" "$(wt "$pl/1000")" "${plm:+  (Max $(wt "$plm/1000") W)}"
+  done
+  [ -n "$shown" ] || echo "== Power Limits: N/A (need /dev/hsmp) =="
+  return 0
+}
+
+# Per-DIMM memory configuration from SMBIOS (dmidecode -t 17): each populated
+# slot's configured speed, voltage and size.
+dram_detail(){
+  local out
+  out=$( (${DMI:-dmidecode} -t 17 2>/dev/null || :) | awk '
+    function val(s){ sub(/.*:[ \t]*/, "", s); return s }
+    /^Memory Device/{loc="";sz="";sp="";v="";inblk=1;next}
+    inblk && /Bank Locator:/{next}
+    inblk && /Locator:/{loc=val($0)}
+    inblk && /Size:[ \t]*[0-9]/{sz=val($0)}
+    inblk && /Configured Memory Speed:[ \t]*[0-9]/{sp=val($0)}
+    inblk && /Configured Voltage:[ \t]*[0-9]/{v=val($0)}
+    function emit(){ if(inblk && sz!="" && sz !~ /No Module/){printf "  %-14s %-11s @ %-7s %s\n", loc, sp, (v==""?"?":v), sz} }
+    /^$/{ emit(); inblk=0 }
+    END{ emit() }')
+  [ -n "$out" ] && { echo "== Memory (per DIMM) =="; printf '%s\n' "$out"; }
+  return 0
+}
+
+# Cache hierarchy from sysfs (cpu0): per-core L1/L2 sizes and shared L3.
+cache_topo(){
+  local d lvl typ sz t out=""
+  [ -d "$CPUROOT/cpu0/cache" ] || return 0
+  for d in "$CPUROOT"/cpu0/cache/index*; do
+    [ -e "$d/level" ] || continue
+    lvl=$(cat "$d/level"); typ=$(cat "$d/type" 2>/dev/null); sz=$(cat "$d/size" 2>/dev/null)
+    case "$typ" in Data) t="L${lvl}d" ;; Instruction) t="L${lvl}i" ;; *) t="L${lvl}" ;; esac
+    out="$out  $t $sz"
+  done
+  [ -n "$out" ] && { echo "== Cache (per core; L3 shared) =="; printf "   %s\n" "$out"; }
+  return 0
+}
+
+# `sckoc info`: the static platform report - everything that does not change
+# at runtime, kept out of the live-refreshing monitor panel. Security state,
+# CPU identity and ratio ceilings, turbo bins, thermal config, power limits
+# and envelope, per-DIMM memory and cache topology. MSR-backed blocks degrade
+# on their own without the msr module; the sysfs/SMBIOS blocks always show.
+info_cmd(){
+  platform_line
+  info_cpu
+  info_turbo
+  info_thermal
+  if [ "$VEN" = GenuineIntel ]; then intel_power; else amd_power; fi
+  dram_detail
+  cache_topo
 }
 wt4(){ awk "BEGIN{printf \"%.4f\", $1}"; }
 
@@ -823,9 +1027,10 @@ uncore_cmd(){
 }
 
 # CPU identification block shown above the per-core overview: marketing name,
-# core/thread topology per socket, family/model/stepping and microcode rev.
+# core/thread topology per socket, base clock (when the caller filled BASEM),
+# family/model/stepping and microcode rev.
 cpu_model_block(){
-  local s c mn md st uc thr cor cc
+  local s c mn md st uc thr cor cc bl
   echo "== CPU =="
   for s in $SOCKETS; do
     c=${REP[$s]}
@@ -839,20 +1044,15 @@ cpu_model_block(){
       thr=$((thr+1))
       [ "$(siblings "$cc" | head -1)" = "$cc" ] && cor=$((cor+1))
     done
-    printf "  S%s  %s  %sC/%sT  fam%s model %s stepping %s%s\n" \
-      "$s" "${mn:-unknown}" "$cor" "$thr" "$FAM" "${md:--}" "${st:--}" "${uc:+  ucode $uc}"
+    bl=""; [ -n "${BASEM[$s]:-}" ] && bl="  Base ${BASEM[$s]} MHz"
+    printf "  S%s  %s  %sC/%sT%s  fam%s model %s stepping %s%s\n" \
+      "$s" "${mn:-unknown}" "$cor" "$thr" "$bl" "$FAM" "${md:--}" "${st:--}" "${uc:+  ucode $uc}"
   done
 }
 intel_sock(){
-  local c=$2 v198 v19c v610 eu pu e1 e2 d1 d2 de dd tj base pl1 pl2 thr
-  tj=$(bits "$(rf "$c" 0x1A2)" 16 8); base=$(bits "$(rf "$c" 0xCE)" 8 8)
-  eu=$(bits "$(rf "$c" 0x606)" 8 5);  pu=$(bits "$(rf "$c" 0x606)" 0 4)
-  v610=$(rf "$c" 0x610)
-  pl1=$(wt "$(bits "$v610" 0 15)/2^$pu"); pl2=$(wt "$(bits "$v610" 32 15)/2^$pu")
-  local en1 en2 lk
-  en1=$( [ "$(bits "$v610" 15 1)" = 1 ] && echo Enabled || echo Disabled)
-  en2=$( [ "$(bits "$v610" 47 1)" = 1 ] && echo Enabled || echo Disabled)
-  lk=$( [ "$(bits "$v610" 63 1)" = 1 ] && echo "  [PL Locked]" || : )
+  local c=$2 v198 v19c eu e1 e2 d1 d2 de dd tj thr
+  tj=$(bits "$(rf "$c" 0x1A2)" 16 8)
+  eu=$(bits "$(rf "$c" 0x606)" 8 5)
   # counters come from the shared sampling window (see mon_sample)
   local ts1 ts2 dts pcs=""
   ts1=$(sv "$c" 0x10 T0); ts2=$(sv "$c" 0x10 T1)
@@ -871,10 +1071,9 @@ intel_sock(){
   local un; un=$(intel_uncore "$1" "$c")
   thr=""; [ "$(bits "$v19c" 0 1)" = 1 ] && thr="  [THROTTLING!]"; [ -z "$thr" ] && [ "$(bits "$v19c" 1 1)" = 1 ] && thr="  [Throttle-Log]"
   printf "  S%s  VID %s V  Temp Max %d°C (TjMax %d°C)%s\n" "$1" "$(wt4 "$(bits "$v198" 32 16)/8192")" "$mx" "$tj" "$thr"
-  printf "      Core %d00 MHz (Base %d00 MHz)  %s\n" "$(bits "$v198" 8 8)" "$base" "$un"
+  printf "      Core %d00 MHz  %s\n" "$(bits "$v198" 8 8)" "$un"
   printf "      DRAM %s\n" "$DRAMSPD"
   printf "      Pkg %s W  DRAM %s W%s\n" "$(wt "$de/2^$eu/$INT")" "$(wt "$dd/2^$eu/$INT")" "$pcs"
-  printf "      PL1 %s W (%s)  PL2 %s W (%s)%s\n" "$pl1" "$en1" "$pl2" "$en2" "$lk"
 }
 
 amd_p0(){ local v; v=$(rf "$1" 0xC0010064)
@@ -967,7 +1166,7 @@ amd_sock(){
   if cl=$(hsmp_q 0x10 1 "$1"); then cl="  CCLK Limit $cl MHz"; else cl=""; fi
   if bw=$(hsmp_q 0x14 1 "$1"); then bw="  BW $(( (bw>>8)&4095 ))/$(( (bw>>20)&4095 )) GB/s ($(( bw&255 ))%)"; else bw=""; fi
   if c0=$(hsmp_q 0x11 1 "$1"); then c0="  C0 ${c0}%"; else c0=""; fi
-  printf "      P0 Base %d MHz  %s%s%s\n" "$(amd_p0 "$c")" "$(amd_fclk "$1")" "$fm" "$cl"
+  printf "      %s%s%s\n" "$(amd_fclk "$1")" "$fm" "$cl"
   printf "      DRAM %s%s\n" "$DRAMSPD" "$bw"
   printf "      Pkg %s W%s%s\n" "$(wt "$de/2^$eu/$INT")" "$ppt" "$c0"
 }
@@ -1099,11 +1298,16 @@ mon_sample(){
   fi
 }
 mon(){
-  platform_info
+  dram_speed
   mon_sample
   echo "== $VEN fam${FAM}  Per-socket Overview =="
   for s in $SOCKETS; do
     if [ "$VEN" = GenuineIntel ]; then intel_sock "$s" "${REP[$s]}"; else amd_sock "$s" "${REP[$s]}"; fi
+  done
+  board_rails
+  for s in $SOCKETS; do
+    if [ "$VEN" = GenuineIntel ]; then BASEM[$s]=$(( $(bits "$(rf "${REP[$s]}" 0xCE)" 8 8) * 100 ))
+    else BASEM[$s]=$(amd_p0 "${REP[$s]}"); fi
   done
   cpu_model_block
   echo "== Per-core Overview =="
@@ -1126,8 +1330,9 @@ mon(){
 }
 
 # --json v1 (schema sckoc-mon-v1): machine-readable core subset of the panel.
-# Text-only extras (PL, PC-states, DRAM, mesh, throttle flags, board rails)
-# stay in the human panel; scripts get sockets + per-core essentials.
+# Text-only extras (PC-states, DRAM, mesh, throttle flags, board rails) stay
+# in the human panel; platform config and PL1/PL2 live under 'sckoc info'.
+# Scripts get sockets + per-core essentials.
 mon_json(){
   mon_sample
   local first=1 s c p tj basec eu de e1 e2
@@ -1189,51 +1394,61 @@ mon_json(){
   printf ']}\n'
 }
 
+# `sckoc vid` (formerly `vcore`): per-core VID / per-rail voltage detail.
+# On Intel this is the 0x198 request voltage, not a measurement; per-core
+# values can differ where firmware programs cores individually - package-
+# scope parts simply report one value for every core.
+vid_cmd(){
+  local c v br0 br1
+  if [ "$VEN" = GenuineIntel ]; then
+    echo "== Per-core VID (0x198[47:32]: requested voltage / regulator target; excludes load-line droop, not measured) =="
+    for c in $CPUS; do
+      [ "$(siblings "$c" | head -1)" = "$c" ] || continue
+      printf "  core%-3d %s V\n" "$c" "$(wt4 "$(bits "$(rf "$c" 0x198)" 32 16)/8192")"
+    done
+  else
+    br0=$(board_vcore VDDCR_CPU0) || br0=""
+    br1=$(board_vcore VDDCR_CPU1) || br1=""
+    if [ -n "$br0" ] || [ -n "$br1" ]; then
+      echo "== Per-rail Vcore (board sensor, nct6798) =="
+      [ -n "$br0" ] && printf "  VDDCR_CPU0  %s V\n" "$br0"
+      [ -n "$br1" ] && printf "  VDDCR_CPU1  %s V\n" "$br1"
+      echo "  (per-core identical: AMD exposes no per-core voltage; rails are VRM-domain)"
+      exit 0
+    fi
+    if smu_ok; then
+      echo "== Rails (ryzen_smu PM table, SMU SVI3 telemetry) =="
+      printf "  VDDCR_CPU   %s V\n" "$(smu_f3 0x48)"
+      printf "  VDDCR_SOC   %s V  (%s A, %s W)\n" "$(smu_f3 0xD8)" "$(smu_f 0xDC)" "$(smu_f 0xE0)"
+      printf "  VDDIO_MEM   %s V   VDD_MISC %s V\n" "$(smu_f3 0xA8)" "$(smu_f3 0xE8)"
+      echo "  (per-core identical: single VDDCR rail on AM5; SMU-reported telemetry)"
+      exit 0
+    fi
+    v=$(amd_vid 0)
+    [ -n "$v" ] || { echo "fam$FAM P-state VID not verified (needs zenpower/ryzen_smu, or a mapped board sensor)"; exit 1; }
+    if [ "$FAM" -ge 26 ]; then
+      echo "== Per-core Vcore: P-state nominal only. fam26 dual-rail BIOS voltage is NOT in MSR =="
+      echo "==   Real per-rail needs a mapped board sensor or BIOS. =="
+    else
+      echo "== Per-core Vcore (P-state VID; per-rail override & LLC not visible) =="
+    fi
+    for c in $CPUS; do
+      [ "$(siblings "$c" | head -1)" = "$c" ] || continue
+      printf "  core%-3d ~%s V\n" "$c" "$(amd_vid "$c")"
+    done
+  fi
+}
+
 case "${1:-mon}" in
   mon) if [ "${2:-}" = "--json" ]; then mon_json; else mon; fi ;;
   --json) mon_json ;;
   uncore) shift; uncore_cmd "$@" ;;
+  info) info_cmd ;;
   dump) shift; for s in $SOCKETS; do
         printf "  S%s cpu%-3s = 0x%s\n" "$s" "${REP[$s]}" \
           "$("$READOC" -p "${REP[$s]}" ${2:+-f $2} -X "$1" 2>/dev/null)"; done ;;
-  vcore)
-    if [ "$VEN" = GenuineIntel ]; then
-      echo "== Per-core VID (0x198[47:32] 请求电压/调节器目标值, 未含 loadline 掉压, 非实测; 包级平台各核相同) =="
-      for c in $CPUS; do
-        [ "$(siblings "$c" | head -1)" = "$c" ] || continue
-        printf "  core%-3d %s V\n" "$c" "$(wt4 "$(bits "$(rf "$c" 0x198)" 32 16)/8192")"
-      done
-    else
-      br0=$(board_vcore VDDCR_CPU0) || br0=""
-      br1=$(board_vcore VDDCR_CPU1) || br1=""
-      if [ -n "$br0" ] || [ -n "$br1" ]; then
-        echo "== Per-rail Vcore (board sensor, nct6798) =="
-        [ -n "$br0" ] && printf "  VDDCR_CPU0  %s V\n" "$br0"
-        [ -n "$br1" ] && printf "  VDDCR_CPU1  %s V\n" "$br1"
-        echo "  (per-core identical: AMD exposes no per-core voltage; rails are VRM-domain)"
-        exit 0
-      fi
-      if smu_ok; then
-        echo "== Rails (ryzen_smu PM table, SMU SVI3 telemetry) =="
-        printf "  VDDCR_CPU   %s V\n" "$(smu_f3 0x48)"
-        printf "  VDDCR_SOC   %s V  (%s A, %s W)\n" "$(smu_f3 0xD8)" "$(smu_f 0xDC)" "$(smu_f 0xE0)"
-        printf "  VDDIO_MEM   %s V   VDD_MISC %s V\n" "$(smu_f3 0xA8)" "$(smu_f3 0xE8)"
-        echo "  (per-core identical: single VDDCR rail on AM5; SMU-reported telemetry)"
-        exit 0
-      fi
-      v=$(amd_vid 0)
-      [ -n "$v" ] || { echo "fam$FAM P-state VID 未验证 (需 zenpower/ryzen_smu 或已收录主板)"; exit 1; }
-      if [ "$FAM" -ge 26 ]; then
-        echo "== Per-core Vcore: P-state nominal only. fam26 dual-rail BIOS voltage is NOT in MSR =="
-        echo "==   Real per-rail needs a mapped board sensor or BIOS. =="
-      else
-        echo "== Per-core Vcore (P-state VID; per-rail override & LLC not visible) =="
-      fi
-      for c in $CPUS; do
-        [ "$(siblings "$c" | head -1)" = "$c" ] || continue
-        printf "  core%-3d ~%s V\n" "$c" "$(amd_vid "$c")"
-      done
-    fi ;;
+  vid) vid_cmd ;;
+  vcore) echo "note: 'vcore' has been renamed - use 'sckoc vid'" >&2; vid_cmd ;;
   -V|version) echo "sckoc $MSRVER"; exit 0 ;;
   -h|--help|help) usage; exit 0 ;;
   *) echo "sckoc: unknown command '$1'"; echo "try: sckoc help"; exit 1 ;;
@@ -1256,7 +1471,7 @@ _sckoc(){
   local cmd=${words[1]:-}
 
   if [ "$cword" -eq 1 ]; then
-    COMPREPLY=($(compgen -W "mon vcore uncore dump uninstall version help --json -V -h --help" -- "$cur"))
+    COMPREPLY=($(compgen -W "mon info vid uncore dump uninstall version help --json -V -h --help" -- "$cur"))
     return
   fi
 
@@ -1277,7 +1492,7 @@ _sckoc(){
         for w in $regs; do [[ ${w,,} == "${cur,,}"* ]] && out+=("$w"); done
         [ ${#out[@]} -gt 0 ] && COMPREPLY=("${out[@]}")
       elif [ "$cword" -eq 3 ]; then
-        # common bitfields: halves, Intel Vcore 47:32, uncore/ratio fields
+        # common bitfields: halves, Intel VID 47:32, uncore/ratio fields
         COMPREPLY=($(compgen -W "63:32 47:32 31:16 31:0 21:15 15:0 14:8 7:0 6:0" -- "$cur"))
         declare -F __ltrim_colon_completions >/dev/null 2>&1 && __ltrim_colon_completions "$cur"
       fi
@@ -1345,7 +1560,7 @@ for m in nct6775 asus_ec_sensors; do modprobe "$m" 2>/dev/null && SENS="$SENS $m
 [ -n "$SENS" ] && printf '%s\n' $SENS > /etc/modules-load.d/sckoc-sensors.conf || true
 
 echo "== installed: $(/usr/local/bin/sckoc -V) @ $(awk '/vendor_id/{print $3;exit}' /proc/cpuinfo) =="
-echo "== usage: sckoc | sckoc dump <reg> [hi:lo] | sckoc vcore | sckoc uncore | sckoc -V | INT=<sec> sckoc =="
+echo "== usage: sckoc | sckoc info | sckoc vid | sckoc uncore | sckoc dump <reg> [hi:lo] | sckoc -V | INT=<sec> sckoc =="
 echo "== tab completion installed (new shells; or: source /etc/bash_completion.d/sckoc) =="
 echo "== first run: =="
 /usr/local/bin/sckoc

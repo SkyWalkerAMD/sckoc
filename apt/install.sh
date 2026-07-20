@@ -22,7 +22,7 @@ command -v dmidecode >/dev/null || {
 T=$(mktemp -d); trap 'rm -rf "$T"' EXIT
 cat > "$T/version.h" <<'VER_H'
 /* SPDX-License-Identifier: GPL-2.0-only */
-#define VERSION_STRING "3.0.0"
+#define VERSION_STRING "3.0.7"
 VER_H
 cat > "$T/readoc.c" <<'READOC_C'
 // SPDX-License-Identifier: GPL-2.0-only
@@ -252,7 +252,7 @@ int main(int argc, char *argv[])
 	return printed ? 0 : 4;
 }
 READOC_C
-gcc -I"$T" -Wall -O2 -D_GNU_SOURCE -D_FILE_OFFSET_BITS=64 "$T/readoc.c" -o /usr/local/bin/readoc
+gcc -std=gnu99 -I"$T" -Wall -O2 -D_GNU_SOURCE -D_FILE_OFFSET_BITS=64 "$T/readoc.c" -o /usr/local/bin/readoc
 cat > "$T/hsmp-msg.c" <<'HSMP_C'
 // SPDX-License-Identifier: GPL-2.0-only
 /* hsmp-msg: generic HSMP query. usage: hsmp-msg <msg_id> <response_sz> <sock> [arg0..]
@@ -302,7 +302,7 @@ int main(int argc, char *argv[])
 	return 0;
 }
 HSMP_C
-gcc -Wall -O2 "$T/hsmp-msg.c" -o /usr/local/bin/hsmp-msg
+gcc -std=gnu99 -Wall -O2 "$T/hsmp-msg.c" -o /usr/local/bin/hsmp-msg
 
 cat > "$T/tpmi-uncore.c" <<'TPMI_C'
 /* SPDX-License-Identifier: GPL-2.0-only */
@@ -462,13 +462,13 @@ int main(void)
     return total > 0 ? 0 : 1;
 }
 TPMI_C
-gcc -Wall -O2 -D_GNU_SOURCE -D_FILE_OFFSET_BITS=64 "$T/tpmi-uncore.c" -o /usr/local/bin/tpmi-uncore
+gcc -std=gnu99 -Wall -O2 -D_GNU_SOURCE -D_FILE_OFFSET_BITS=64 "$T/tpmi-uncore.c" -o /usr/local/bin/tpmi-uncore
 
 cat > /usr/local/bin/sckoc <<'MSR_SH'
 #!/bin/bash
 # SPDX-License-Identifier: GPL-2.0-only
 # sckoc: Intel/AMD read-only hardware monitor (no writes)
-MSRVER=3.0.0
+MSRVER=3.0.7
 # No 'set -e': this is a read-only monitor built from many best-effort MSR
 # reads, and blocks use the `[ cond ] && action` idiom throughout (which
 # returns non-zero when the guard is false). Each block degrades on its own;
@@ -854,8 +854,18 @@ amd_power(){
 # Per-DIMM memory configuration from SMBIOS (dmidecode -t 17): each populated
 # slot's configured speed, voltage and size.
 dram_detail(){
-  local out
-  out=$( (${DMI:-dmidecode} -t 17 2>/dev/null || :) | awk '
+  local out slots="" temps="" sl rest t
+  while IFS='|' read -r sl rest; do
+    [ -n "$sl" ] || continue
+    slots="$slots $sl"
+    t=$(bmc_read_sensor "$sl" "${rest%%|*}" "${rest##*|}")
+    temps="$temps ${t:--}"
+  done <<EOFSL
+$(bmc_dimm_slots)
+EOFSL
+  slots=${slots# }; temps=${temps# }
+  out=$( (${DMI:-dmidecode} -t 17 2>/dev/null || :) | awk -v slots="$slots" -v temps="$temps" '
+    BEGIN{ nslot=split(slots, slot, " "); split(temps, tt, " ") }
     function val(s){ sub(/.*:[ \t]*/, "", s); return s }
     /^Memory Device/{loc="";sz="";sp="";v="";inblk=1;next}
     inblk && /Bank Locator:/{next}
@@ -863,9 +873,22 @@ dram_detail(){
     inblk && /Size:[ \t]*[0-9]/{sz=val($0)}
     inblk && /Configured Memory Speed:[ \t]*[0-9]/{sp=val($0)}
     inblk && /Configured Voltage:[ \t]*[0-9]/{v=val($0)}
-    function emit(){ if(inblk && sz!="" && sz !~ /No Module/){printf "  %-14s %-11s @ %-7s %s\n", loc, sp, (v==""?"?":v), sz} }
-    /^$/{ emit(); inblk=0 }
-    END{ emit() }')
+    function stash(){ if(inblk && sz!="" && sz !~ /No Module/){ n++; L[n]=loc; SP[n]=sp; VV[n]=(v==""?"?":v); SZ[n]=sz; if(n==1) first=loc; else if(loc!=first) mixed=1 } }
+    /^$/{ stash(); inblk=0 }
+    END{ stash()
+      # SMBIOS locators with no information (all identical) + a matching
+      # count of BMC-populated slots: show the real slot names instead.
+      usebmc = (n>0 && !mixed && n==nslot)
+      for(i=1;i<=n;i++){
+        l=L[i]
+        if(usebmc){
+          l=slot[i] " (bmc)"
+          if(tt[i] ~ /^[0-9]+$/) { printf "  %-14s %-11s @ %-7s %-8s %s°C\n", l, SP[i], VV[i], SZ[i], tt[i]; continue }
+        }
+        else { seen[L[i]]++; if(seen[L[i]]>1) l=L[i] " #" seen[L[i]] }
+        printf "  %-14s %-11s @ %-7s %s\n", l, SP[i], VV[i], SZ[i]
+      }
+    }')
   [ -n "$out" ] && { echo "== Memory (per DIMM) =="; printf '%s\n' "$out"; }
   return 0
 }
@@ -1094,6 +1117,96 @@ amd_vid(){
     [ "$vid" -gt 0 ] && [ "$vid" -lt 248 ] && wt4 "1.55 - $vid*0.00625" || echo ""
   else echo ""; fi
 }
+# BMC sensors over the IPMI side-band (ipmitool): need no kernel driver, so
+# they work where k10temp does not know the CPU yet (e.g. new AMD parts on
+# old kernels). Slow-KCS aware: the one-off SDR probe (per boot, cached in
+# /run) gets BMCPROBET seconds and a timeout is retried next tick - only a
+# truly absent BMC is negative-cached. Cache lines are name|id|mode: at
+# probe time each sensor gets one raw Get Sensor Reading (a single IPMI
+# message; "sdr get" would rescan the whole SDR every time) validated
+# against the SDR value - matching sensors refresh via raw, others fall
+# back to sdr get. Soft dependency on ipmitool.
+bmc_prep(){
+  BMCIPT="${IPMITOOL:-$(command -v ipmitool || :)}"
+  [ -n "$BMCIPT" ] || return 1
+  [ -e /dev/ipmi0 ] || modprobe ipmi_devintf 2>/dev/null || true
+  [ -e /dev/ipmi0 ] || modprobe ipmi_si 2>/dev/null || true
+}
+bmc_read_sensor(){  # $1=name $2=id $3=mode -> prints integer reading or nothing
+  local raw t
+  [ -n "$BMCIPT" ] || bmc_prep || return 0
+  if [ "$3" = raw ]; then
+    raw=$(timeout "${BMCREADT:-3}" "$BMCIPT" raw 0x04 0x2d "0x$2" 2>/dev/null) || return 0
+    set -- $raw
+    case "${1:-}" in ''|*[!0-9a-fA-F]*) return 0 ;; esac
+    t=$(( 16#$1 ))
+  else
+    t=$(timeout "${BMCPROBET:-20}" "$BMCIPT" sdr get "$1" 2>/dev/null \
+        | awk -F': *' '/Sensor Reading/{print $2+0; exit}')
+  fi
+  case "$t" in ''|0|*[!0-9]*) return 0 ;; esac
+  [ "$t" -lt 150 ] || return 0
+  printf '%s' "$t"
+}
+bmc_probe(){  # scan the SDR once, write "name|id|mode" lines: $1 -> CPU cache, $2 -> DIMM cache
+  local cc=$1 dc=$2 tbl rc c1 c2 d1 d2 c5 n i v m ck cpu="" dimm=""
+  tbl=$(timeout "${BMCPROBET:-20}" "$BMCIPT" sdr type Temperature 2>/dev/null); rc=$?
+  if [ "$rc" -ne 0 ] || [ -z "$tbl" ]; then
+    # 124 = killed by timeout (slow BMC): retry next tick, don't negative-cache
+    [ "$rc" -eq 124 ] && return 1
+    echo none > "$cc" 2>/dev/null || true; echo none > "$dc" 2>/dev/null || true
+    return 1
+  fi
+  while IFS='|' read -r c1 c2 d1 d2 c5; do
+    n=$(echo $c1)
+    case "$c5" in *degrees*) ;; *) continue ;; esac
+    case "$(printf '%s' "$n" | tr 'A-Z' 'a-z')" in
+      *vr*|*pch*|*pci*) continue ;;
+      *dimm*) v=dimm ;;
+      *cpu*|*processor*) v=cpu ;;
+      *) continue ;;
+    esac
+    i=$(echo $c2); i=${i%h}
+    case "$i" in ''|*[!0-9a-fA-F]*) continue ;; esac
+    m=sdr
+    ck=$(timeout "${BMCREADT:-3}" "$BMCIPT" raw 0x04 0x2d "0x$i" 2>/dev/null) || ck=""
+    set -- $ck
+    case "${1:-}" in ''|*[!0-9a-fA-F]*) ;; *)
+      [ $(( 16#$1 )) -eq "$(( $(echo ${c5%%degrees*}) ))" ] 2>/dev/null && m=raw ;;
+    esac
+    if [ "$v" = dimm ]; then n=${n%_Temp}; n=${n%_TEMP}; n=${n% Temp}; dimm="$dimm$n|$i|$m
+"; else cpu="$cpu$n|$i|$m
+"; fi
+  done <<EOFTBL
+$tbl
+EOFTBL
+  { [ -n "$cpu" ] && printf '%s' "$cpu" || echo none; } > "$cc" 2>/dev/null || true
+  { [ -n "$dimm" ] && printf '%s' "$dimm" | sort || echo none; } > "$dc" 2>/dev/null || true
+  return 0
+}
+bmc_temp(){  # $1 = socket index; prints e.g. "31°C (bmc)" or returns 1
+  local so=$1 cache="${BMCCACHE:-/run/sckoc-bmc}" dcache="${BMCDIMMS:-/run/sckoc-bmc-dimm}"
+  bmc_prep || return 1
+  local line t
+  if [ ! -s "$cache" ] || ! grep -q '|' "$cache" 2>/dev/null && [ "$(cat "$cache" 2>/dev/null)" != none ]; then
+    bmc_probe "$cache" "$dcache" || return 1
+  fi
+  line=$(sed -n "$(( so + 1 ))p" "$cache" 2>/dev/null)
+  [ -n "$line" ] && [ "$line" != none ] || return 1
+  t=$(bmc_read_sensor "${line%%|*}" "$(printf '%s' "$line" | cut -d'|' -f2)" "${line##*|}")
+  [ -n "$t" ] || return 1
+  printf "%d°C (bmc)" "$t"
+}
+bmc_dimm_slots(){  # prints "name|id|mode" lines for populated DIMM slots, possibly nothing
+  local cache="${BMCCACHE:-/run/sckoc-bmc}" dcache="${BMCDIMMS:-/run/sckoc-bmc-dimm}"
+  bmc_prep || return 0
+  if [ ! -s "$dcache" ] || ! grep -q '|' "$dcache" 2>/dev/null && [ "$(cat "$dcache" 2>/dev/null)" != none ]; then
+    bmc_probe "$cache" "$dcache" || return 0
+  fi
+  [ "$(cat "$dcache" 2>/dev/null)" = none ] && return 0
+  cat "$dcache" 2>/dev/null
+  return 0
+}
 amd_temp(){
   local h i=0 f t mx=""
   for h in "${HWROOT:-/sys/class/hwmon}"/hwmon*; do
@@ -1114,6 +1227,7 @@ amd_temp(){
     t=$(smu_fi 0x2C)
     case "$t" in ''|*[!0-9]*) ;; *) [ "$t" -gt 0 ] && [ "$t" -lt 150 ] && { printf "%d°C (smu)" "$t"; return; } ;; esac
   fi
+  local bt; if bt=$(bmc_temp "$1"); then printf '%s' "$bt"; return; fi
   printf "N/A (need k10temp)"; }
 hsmp_q(){
   local h="${HSMP:-$( [ -x "$LIBEXEC/hsmp-msg" ] && echo "$LIBEXEC/hsmp-msg" || command -v hsmp-msg || echo /usr/local/bin/hsmp-msg )}"
@@ -1158,9 +1272,9 @@ amd_sock(){
     esac
   else
     local vc; vc=$(amd_vid "$2")
-    if [ -z "$vc" ]; then vctxt="Vcore N/A"
-    elif [ "$FAM" -ge 26 ]; then vctxt="Vcore ~$vc V (P-state nominal, not rail V)"
-    else vctxt="Vcore ~$vc V (P-state VID)"; fi
+    if [ -z "$vc" ]; then vctxt="VID N/A"
+    elif [ "$FAM" -ge 26 ]; then vctxt="VID ~$vc V (P-state nominal)"
+    else vctxt="VID ~$vc V (P-state)"; fi
   fi
   printf "  S%s  Temp Max %s  %s%s\n" "$1" "$(amd_temp "$1")" "$vctxt" "$ph"
   local fm="" cl="" bw="" c0=""
@@ -1170,7 +1284,14 @@ amd_sock(){
   if c0=$(hsmp_q 0x11 1 "$1"); then c0="  C0 ${c0}%"; else c0=""; fi
   printf "      %s%s%s\n" "$(amd_fclk "$1")" "$fm" "$cl"
   printf "      DRAM %s%s\n" "$DRAMSPD" "$bw"
-  printf "      Pkg %s W%s%s\n" "$(wt "$de/2^$eu/$INT")" "$ppt" "$c0"
+  # a counter that does not advance between the two samples (dead counter,
+  # or an unreadable MSR snapped as 0) would render a misleading "Pkg 0.0 W":
+  # no running package sits at zero. Prefer HSMP ReadSocketPower, else N/A.
+  local pkgtxt sp
+  if [ "$de" -gt 0 ]; then pkgtxt="Pkg $(wt "$de/2^$eu/$INT") W"
+  elif sp=$(hsmp_q 0x04 1 "$1"); then pkgtxt="Pkg $(wt "$sp/1000") W (hsmp)"
+  else pkgtxt="Pkg N/A (energy counter not advancing; need BIOS HSMP)"; fi
+  printf "      %s%s%s\n" "$pkgtxt" "$ppt" "$c0"
 }
 
 percore(){
@@ -1360,7 +1481,8 @@ mon_json(){
       eu=$(bits "$(rf "$c" 0xC0010299)" 8 5)
       e1=$(( $(sv "$c" 0xc001029b T0) & 4294967295 )); e2=$(( $(sv "$c" 0xc001029b T1) & 4294967295 ))
       de=$(( e2>=e1 ? e2-e1 : e2-e1+4294967296 ))
-      printf '{"id":%s,"pkg_w":%s}' "$s" "$(wt "$de/2^$eu/$INT")"
+      local pw=null; [ "$de" -gt 0 ] && pw=$(wt "$de/2^$eu/$INT")
+      printf '{"id":%s,"pkg_w":%s}' "$s" "$pw"
     fi
   done
   printf '],"cores":['
@@ -1429,10 +1551,10 @@ vid_cmd(){
     v=$(amd_vid 0)
     [ -n "$v" ] || { echo "fam$FAM P-state VID not verified (needs zenpower/ryzen_smu, or a mapped board sensor)"; exit 1; }
     if [ "$FAM" -ge 26 ]; then
-      echo "== Per-core Vcore: P-state nominal only. fam26 dual-rail BIOS voltage is NOT in MSR =="
+      echo "== Per-core VID: P-state nominal only. fam26 dual-rail BIOS voltage is NOT in MSR =="
       echo "==   Real per-rail needs a mapped board sensor or BIOS. =="
     else
-      echo "== Per-core Vcore (P-state VID; per-rail override & LLC not visible) =="
+      echo "== Per-core VID (P-state nominal; per-rail override & LLC not visible) =="
     fi
     for c in $CPUS; do
       [ "$(siblings "$c" | head -1)" = "$c" ] || continue

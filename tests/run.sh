@@ -35,7 +35,7 @@ chk "build-deb == $V"        "grep -q 'V=$V' packaging/build-deb.sh"
 chk "man .TH == $V"          "grep -q '\"sckoc $V\"' packaging/sckoc.1"
 
 echo "== t4 readoc unit (single + batch) =="
-gcc -Wall -O2 -I. -o "$T/readoc" readoc.c || bad "readoc compiles"
+gcc -std=gnu99 -Wall -O2 -I. -o "$T/readoc" readoc.c || bad "readoc compiles"
 python3 - "$T" <<'PY'
 import struct, sys
 d = sys.argv[1]
@@ -154,6 +154,50 @@ Memory Device
 OUT
 DMI
 chmod +x "$T/fakedmi"
+cat > "$T/fakeipmi" <<'FIP'
+#!/bin/bash
+C="$0.cnt"
+if [ "$1 $2 $3" = "sdr type Temperature" ]; then
+cat <<'TBL'
+CPU Package Temp | 01h |  ok  |  3.0 | 31 degrees C
+VR CPU Temp      | 20h |  ok  |  7.0 | 45 degrees C
+DIMMA1_Temp      | 04h |  ns  |  8.0 | No Reading
+DIMMC1_Temp      | 06h |  ok  |  8.0 | 30 degrees C
+DIMMF1_Temp      | 09h |  ok  |  8.0 | 30 degrees C
+TBL
+elif [ "$1 $2 $3" = "raw 0x04 0x2d" ]; then
+  case "$4" in
+    0x06) echo " 1e 40 40" ;;
+    0x09) echo " 1d 40 40" ;;
+    *) n=$(cat "$C" 2>/dev/null || echo 0); echo $((n+1)) > "$C"
+       if [ "$n" -le 1 ]; then echo " 1f 40 40"; else echo " 21 40 40"; fi ;;
+  esac
+fi
+FIP
+chmod +x "$T/fakeipmi"
+cat > "$T/slowipmi" <<'FIP'
+#!/bin/bash
+[ "$1 $2 $3" = "sdr type Temperature" ] && { sleep 2; echo "CPU Package Temp | 01h | ok | 3.0 | 31 degrees C"; }
+FIP
+chmod +x "$T/slowipmi"
+cat > "$T/dmidup" <<'DMI'
+#!/bin/sh
+cat <<'OUT'
+Memory Device
+	Size: 32 GB
+	Locator: DIMM 0
+	Configured Memory Speed: 6400 MT/s
+	Configured Voltage: 1.1 V
+
+Memory Device
+	Size: 32 GB
+	Locator: DIMM 0
+	Configured Memory Speed: 6400 MT/s
+	Configured Voltage: 1.1 V
+
+OUT
+DMI
+chmod +x "$T/dmidup"
 
 bash sckoc help > "$T/help.out"
 chk "help lists vid"               "grep -q 'sckoc vid ' '$T/help.out'"
@@ -197,7 +241,7 @@ chk "info thermal TjMax"       "env $I10 bash sckoc info | grep -q 'TjMax 97' &&
 chk "info PL line + window"    "env $I10 bash sckoc info | grep -qE 'S0  PL1 125.0 W \(Enabled, [0-9.]+ s\)  PL2 250.0 W \(Enabled, [0-9.]+ s\)'"
 chk "info package envelope"    "env MSRVEN=GenuineIntel READOC=$T/readoc READOC_DEV=$T/pkg%d.msr SBDIR=$T/sb2 LDF=$T/ld2 bash sckoc info | grep -q 'Package: TDP 350.0 W  Min 200.0 W  Max 500.0 W'"
 chk "info cache topology"      "env MSRVEN=GenuineIntel CPUROOT=$T/topo READOC=$T/readoc READOC_DEV=$T/info%d.msr SBDIR=$T/sb2 LDF=$T/ld2 bash sckoc info | grep -q '== Cache' && env MSRVEN=GenuineIntel CPUROOT=$T/topo READOC=$T/readoc READOC_DEV=$T/info%d.msr SBDIR=$T/sb2 LDF=$T/ld2 bash sckoc info | grep -q 'L1d 48K'"
-IDMI="MSRVEN=GenuineIntel CPUROOT=$T/topo READOC=$T/readoc READOC_DEV=$T/info%d.msr SBDIR=$T/sb2 LDF=$T/ld2 DMI=$T/fakedmi"
+IDMI="MSRVEN=GenuineIntel CPUROOT=$T/topo READOC=$T/readoc READOC_DEV=$T/info%d.msr SBDIR=$T/sb2 LDF=$T/ld2 DMI=$T/fakedmi IPMITOOL=/nonexistent"
 chk "info memory parsed"      "env $IDMI bash sckoc info | grep -qE 'CPU0_DIMM_A1.*6400 MT/s.*1.1 V.*16 GB'"
 chk "info populated memory keeps Cache" "env $IDMI bash sckoc info | grep -q '== Memory' && env $IDMI bash sckoc info | grep -q '== Cache'"
 chk "info without msr degrades" "env MSRVEN=GenuineIntel READOC=/nonexistent SBDIR=$T/sb2 LDF=$T/ld2 bash sckoc info | grep -q 'N/A (need msr module'"
@@ -216,6 +260,34 @@ if [ -e /dev/cpu/0/msr ]; then
   chk "mon: Base moved to CPU block"   "grep -q 'Base 2500 MHz' '$T/mon.out' && ! grep -q '(Base' '$T/mon.out'"
   env $M10 DMI=$T/fakedmi bash sckoc > "$T/monp.out" 2>/dev/null || true
   chk "mon survives populated dmidecode" "grep -q 'Per-socket Overview' '$T/monp.out'"
+  # AMD: a package energy counter that does not advance (static fixture reads
+  # the same value at T0 and T1) must not render "Pkg 0.0 W" - regression for
+  # Threadripper PRO 9955WX where 0xC001029B stays 0 while per-core advances.
+  python3 - "$T" <<'PYA'
+import struct, sys
+p = sys.argv[1] + '/amd0.msr'
+with open(p, 'wb') as f:
+    f.seek(0xC0010299); f.write(struct.pack('<Q', 16 << 8))        # energy unit 2^-16
+    f.seek(0xC0010064); f.write(struct.pack('<Q', (1 << 63) | 900))  # P0 enabled, FID 900 -> 4500 MHz (fam26)
+PYA
+  A10="MSRVEN=AuthenticAMD MSRFAM=26 INT=1 READOC=$T/readoc READOC_DEV=$T/amd%d.msr DMI=/bin/false UNCSYS=$T/none TPMIU=/nonexistent SMUDRV=$T/none IPMITOOL=/nonexistent HWROOT=$T/nohw"
+  env $A10 bash sckoc > "$T/mona.out" 2>/dev/null || true
+  chk "AMD mon: dead pkg counter -> N/A" "grep -q 'Pkg N/A (energy counter not advancing' '$T/mona.out' && ! grep -q 'Pkg 0.0 W' '$T/mona.out'"
+  chk "AMD json: dead pkg counter -> null" "env $A10 bash sckoc --json 2>/dev/null | grep -q '\"pkg_w\":null'"
+  chk "AMD mon: P-state fallback labelled VID" "grep -qE 'VID (~|N/A)' '$T/mona.out' && ! grep -q 'Vcore ~' '$T/mona.out'"
+  rm -f /run/sckoc-bmc /run/sckoc-bmc-dimm 2>/dev/null || true
+  IPB="MSRVEN=AuthenticAMD MSRFAM=26 INT=1 READOC=$T/readoc READOC_DEV=$T/amd%d.msr DMI=/bin/false UNCSYS=$T/none TPMIU=/nonexistent SMUDRV=$T/none HWROOT=$T/nohw IPMITOOL=$T/fakeipmi BMCCACHE=$T/bmcc BMCDIMMS=$T/bmcdimm"
+  env $IPB bash sckoc > "$T/monb1.out" 2>/dev/null || true
+  chk "AMD mon: BMC temp fallback (probe)" "grep -q 'Temp Max 31' '$T/monb1.out' && grep -q '(bmc)' '$T/monb1.out'"
+  chk "AMD mon: BMC probe caches sensor id + raw mode" "[ \"\$(cat '$T/bmcc')\" = 'CPU Package Temp|01|raw' ]"
+  env $IPB bash sckoc > "$T/monb2.out" 2>/dev/null || true
+  chk "AMD mon: BMC cached raw single-message read" "grep -q 'Temp Max 33' '$T/monb2.out'"
+  env $IPB IPMITOOL=$T/slowipmi BMCCACHE=$T/bmslow BMCDIMMS=$T/bmslowd BMCPROBET=1 bash sckoc >/dev/null 2>&1 || true
+  chk "AMD mon: slow-BMC timeout is not negative-cached" "[ ! -e '$T/bmslow' ]"
+  chk "info: duplicate DIMM locators numbered" "env MSRVEN=AuthenticAMD MSRFAM=26 READOC=$T/readoc READOC_DEV=$T/amd%d.msr SBDIR=$T/sb2 LDF=$T/ld2 DMI=$T/dmidup IPMITOOL=/nonexistent BMCDIMMS=$T/nodimm bash sckoc info | grep -q 'DIMM 0 #2'"
+SLOTE="MSRVEN=AuthenticAMD MSRFAM=26 READOC=$T/readoc READOC_DEV=$T/amd%d.msr SBDIR=$T/sb2 LDF=$T/ld2 DMI=$T/dmidup IPMITOOL=$T/fakeipmi BMCCACHE=$T/slotc BMCDIMMS=$T/slotd"
+chk "info: BMC slot names replace blank locators" "env $SLOTE bash sckoc info | grep -q 'DIMMC1 (bmc)' && env $SLOTE bash sckoc info | grep -q 'DIMMF1 (bmc)'"
+chk "info: BMC DIMM rows show live temperature" "env $SLOTE bash sckoc info | grep -Eq 'DIMMC1 \(bmc\).*32 GB +30' && env $SLOTE bash sckoc info | grep -Eq 'DIMMF1 \(bmc\).*32 GB +29'"
   V10="MSRVEN=GenuineIntel READOC=$T/readoc READOC_DEV=$T/vid%d.msr"
   env $V10 bash sckoc vcore > "$T/vc.out" 2> "$T/vc.err" || true
   chk "vcore alias: stderr notice"     "grep -q \"use 'sckoc vid'\" '$T/vc.err'"

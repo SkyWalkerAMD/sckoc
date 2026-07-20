@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: GPL-2.0-only
 Name:           sckoc
-Version:        3.0.0
+Version:        3.0.7
 Release:        1%{?dist}
 Summary:        Read-only hardware monitor for Intel/AMD servers
 License:        GPL-2.0-only
@@ -9,6 +9,7 @@ Source0:        %{url}/archive/refs/tags/%{version}/%{name}-%{version}.tar.gz
 BuildRequires:  gcc
 BuildRequires:  make
 Requires:       dmidecode
+Recommends:     ipmitool
 Requires:       kmod
 Requires(post): kmod
 ExclusiveArch:  x86_64
@@ -75,6 +76,54 @@ if [ "$1" = 0 ]; then rm -f /etc/modules-load.d/sckoc-amd.conf; fi
 %ghost %{_sysconfdir}/modules-load.d/sckoc-amd.conf
 
 %changelog
+* Mon Jul 20 2026 SkyWalkerAMD <scka7t@gmail.com> - 3.0.7-1
+- info: BMC-substituted DIMM rows also show each module's current
+  temperature, read per sensor via raw Get Sensor Reading with the same
+  probe-once-then-cache mechanism as the CPU sensor; shown only where the
+  slot names themselves come from the BMC, so the pairing is exact
+
+* Mon Jul 20 2026 SkyWalkerAMD <scka7t@gmail.com> - 3.0.6-1
+- info: when the SMBIOS DIMM locators carry no information (all identical)
+  and the count matches the BMC's populated DIMM temperature sensors, the
+  real slot names are shown instead, labelled (bmc) - e.g. DIMMC1/DIMMF1
+  on boards that label every slot "DIMM 0"; boards with proper locators
+  are untouched, and a count mismatch falls back to the #N numbering
+
+* Mon Jul 20 2026 SkyWalkerAMD <scka7t@gmail.com> - 3.0.5-1
+- mon (AMD): rework the BMC path for slow KCS interfaces - the one-off SDR
+  probe now gets 20s (BMCPROBET) and a timeout is retried next tick instead
+  of being negative-cached (only a truly absent BMC is remembered); cached
+  refreshes send one raw Get Sensor Reading by sensor id (a single IPMI
+  message, validated against the SDR at probe time) instead of "sdr get",
+  which rescans the whole SDR; the cache moved to /run/sckoc-bmc so hosts
+  locked out by the old negative cache recover on upgrade
+
+* Mon Jul 20 2026 SkyWalkerAMD <scka7t@gmail.com> - 3.0.4-1
+- mon (AMD): BMC temperature fallback - where k10temp/SMU cannot cover the
+  CPU, a responding BMC is read over the IPMI side-band via ipmitool
+  (sensor names probed once per boot and cached to /run; refreshes read a
+  single sensor; values labelled (bmc)); ipmitool is a new weak dependency
+- info: repeated SMBIOS DIMM locators get a #N suffix so boards that label
+  every slot "DIMM 0" still show distinguishable per-DIMM rows
+
+* Mon Jul 20 2026 SkyWalkerAMD <scka7t@gmail.com> - 3.0.3-1
+- mon/vid (AMD): P-state fallback readings are now labelled VID, matching
+  the Intel convention (Vcore = measured rail voltage, VID = nominal /
+  requested value); board-sensor and SMU SVI3 paths keep the Vcore label
+
+* Mon Jul 20 2026 SkyWalkerAMD <scka7t@gmail.com> - 3.0.2-1
+- mon/--json (AMD): when the package energy counter (0xC001029B) does not
+  advance between the two samples, report Pkg N/A with an HSMP hint (and
+  pkg_w:null in JSON) instead of a misleading "Pkg 0.0 W"; fall back to
+  HSMP ReadSocketPower (0x04) when available. Seen on Threadripper PRO
+  9955WX where the package counter stays 0 while per-core counters advance
+
+* Mon Jul 20 2026 SkyWalkerAMD <scka7t@gmail.com> - 3.0.1-1
+- build: compile the C helpers with -std=gnu99 everywhere (Makefile,
+  install.sh, build-deb, tests) - EL7's gcc 4.8 defaults to gnu90 and
+  rejects the C99 for-loop declarations, which broke the script install
+  on CentOS 7.9
+
 * Sun Jul 19 2026 SkyWalkerAMD <scka7t@gmail.com> - 3.0.0-1
 - completion: the dump register table catches up with the 2.6.0 decoders
   (Intel 0x1AE turbo core-count thresholds and 0x614 PKG_POWER_INFO; AMD

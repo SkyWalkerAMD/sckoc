@@ -2,12 +2,12 @@
 # SPDX-License-Identifier: GPL-2.0-only
 # build sckoc .deb — run from repo root: bash packaging/build-deb.sh
 set -e
-V=3.0.0; R=1; A=$(dpkg --print-architecture 2>/dev/null || echo amd64)
+V=3.0.7; R=1; A=$(dpkg --print-architecture 2>/dev/null || echo amd64)
 D=$(mktemp -d)
 # helpers are compiled under their real names; /usr/bin/sckoc is the SCRIPT
-gcc -Wall -O2 -D_GNU_SOURCE -D_FILE_OFFSET_BITS=64 -I. readoc.c -o "$D/readoc"
-gcc -Wall -O2 -D_GNU_SOURCE -D_FILE_OFFSET_BITS=64 hsmp-msg.c -o "$D/hsmp-msg"
-gcc -Wall -O2 -D_GNU_SOURCE -D_FILE_OFFSET_BITS=64 tpmi-uncore.c -o "$D/tpmi-uncore"
+gcc -std=gnu99 -Wall -O2 -D_GNU_SOURCE -D_FILE_OFFSET_BITS=64 -I. readoc.c -o "$D/readoc"
+gcc -std=gnu99 -Wall -O2 -D_GNU_SOURCE -D_FILE_OFFSET_BITS=64 hsmp-msg.c -o "$D/hsmp-msg"
+gcc -std=gnu99 -Wall -O2 -D_GNU_SOURCE -D_FILE_OFFSET_BITS=64 tpmi-uncore.c -o "$D/tpmi-uncore"
 P="$D/pkg"
 install -D -m755 sckoc          "$P/usr/bin/sckoc"
 install -D -m755 "$D/readoc"    "$P/usr/libexec/sckoc/readoc"
@@ -26,7 +26,7 @@ Version: $V-$R
 Architecture: $A
 Maintainer: SkyWalkerAMD <scka7t@gmail.com>
 Depends: kmod
-Recommends: dmidecode
+Recommends: dmidecode, ipmitool
 Section: utils
 Priority: optional
 Homepage: https://github.com/SkyWalkerAMD/sckoc

@@ -1,5 +1,5 @@
 .\" SPDX-License-Identifier: GPL-2.0-only
-.TH SCKOC 1 "July 2026" "sckoc 3.0.0" "User Commands"
+.TH SCKOC 1 "July 2026" "sckoc 3.0.7" "User Commands"
 .SH NAME
 sckoc \- read-only MSR/HSMP hardware monitor for Intel and AMD systems
 .SH SYNOPSIS
@@ -71,7 +71,12 @@ programmable-limit flags from
 the turbo ratio limit bins; thermal configuration (TjMax and the
 TCC/PROCHOT offset); the RAPL power limits (PL1/PL2 with time windows and
 lock) and the package power envelope (TDP, minimum, maximum); the
-per-DIMM memory configuration; and the cache topology. The MSR-backed
+per-DIMM memory configuration (when the SMBIOS locators carry no
+information, the real slot names are recovered from the BMC DIMM
+temperature sensors and labelled
+.IR (bmc) ,
+with each module's current temperature);
+and the cache topology. The MSR-backed
 blocks degrade individually without the
 .B msr
 module; the sysfs and SMBIOS blocks always print.
@@ -84,7 +89,8 @@ and true rail telemetry is only reachable via BMC/PMBus. Per-core values
 can differ where firmware programs cores individually; package-scope
 parts report one value for every core. On AMD the command prints measured
 per-rail voltages where a mapped board Super I/O sensor or the ryzen_smu
-SVI3 telemetry is available, otherwise the P-state nominal value.
+SVI3 telemetry is available (labelled Vcore), otherwise the P-state
+nominal value (labelled VID).
 The former name
 .B vcore
 is accepted as a deprecated alias.
@@ -145,7 +151,12 @@ kernel module (the
 .B uncore
 command alone also works without it when the intel-uncore-frequency
 sysfs driver is present). AMD temperature readings need
-.BR k10temp .
+.BR k10temp ;
+where it cannot cover the CPU, a responding BMC is read over the IPMI
+side-band via
+.B ipmitool
+instead (sensor names probed once per boot and cached), labelled
+.IR (bmc) .
 AMD FCLK and PPT readings need
 .I /dev/hsmp
 (the

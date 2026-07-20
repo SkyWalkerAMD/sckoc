@@ -1,7 +1,7 @@
 #!/bin/bash
 # SPDX-License-Identifier: GPL-2.0-only
 # sckoc: Intel/AMD read-only hardware monitor (no writes)
-MSRVER=3.0.7
+MSRVER=3.0.8
 # No 'set -e': this is a read-only monitor built from many best-effort MSR
 # reads, and blocks use the `[ cond ] && action` idiom throughout (which
 # returns non-zero when the guard is false). Each block degrades on its own;
@@ -387,11 +387,12 @@ amd_power(){
 # Per-DIMM memory configuration from SMBIOS (dmidecode -t 17): each populated
 # slot's configured speed, voltage and size.
 dram_detail(){
-  local out slots="" temps="" sl rest t
+  local out slots="" temps="" sl rest disp t
   while IFS='|' read -r sl rest; do
     [ -n "$sl" ] || continue
-    slots="$slots $sl"
-    t=$(bmc_read_sensor "$sl" "${rest%%|*}" "${rest##*|}")
+    t=$(bmc_read_sensor "$sl" "${rest%%|*}" "${rest##*|}")   # full name for sdr get
+    disp=${sl%_Temp}; disp=${disp%_TEMP}; disp=${disp% Temp}  # strip only for display
+    slots="$slots $disp"
     temps="$temps ${t:--}"
   done <<EOFSL
 $(bmc_dimm_slots)
@@ -705,9 +706,12 @@ bmc_probe(){  # scan the SDR once, write "name|id|mode" lines: $1 -> CPU cache, 
     ck=$(timeout "${BMCREADT:-3}" "$BMCIPT" raw 0x04 0x2d "0x$i" 2>/dev/null) || ck=""
     set -- $ck
     case "${1:-}" in ''|*[!0-9a-fA-F]*) ;; *)
-      [ $(( 16#$1 )) -eq "$(( $(echo ${c5%%degrees*}) ))" ] 2>/dev/null && m=raw ;;
+      # accept raw if it lands within 5C of the SDR reading (a sensor drifts
+      # a degree or two between the SDR scan and this probe - an exact-match
+      # rule would wrongly demote it to the slower per-tick "sdr get")
+      d=$(( 16#$1 - $(echo ${c5%%degrees*}) )); [ "$d" -ge -5 ] && [ "$d" -le 5 ] && m=raw ;;
     esac
-    if [ "$v" = dimm ]; then n=${n%_Temp}; n=${n%_TEMP}; n=${n% Temp}; dimm="$dimm$n|$i|$m
+    if [ "$v" = dimm ]; then dimm="$dimm$n|$i|$m
 "; else cpu="$cpu$n|$i|$m
 "; fi
   done <<EOFTBL

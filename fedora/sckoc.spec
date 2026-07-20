@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: GPL-2.0-only
 Name:           sckoc
-Version:        3.0.7
+Version:        3.0.8
 Release:        %autorelease
 Summary:        Read-only hardware monitor for Intel and AMD servers
 
@@ -72,6 +72,13 @@ test -x %{buildroot}%{_libexecdir}/%{name}/tpmi-uncore
 %{_mandir}/man1/sckoc.1*
 
 %changelog
+* Mon Jul 20 2026 SkyWalkerAMD <scka7t@gmail.com> - 3.0.8-1
+- mon/info (AMD BMC): fix the per-DIMM temperature path - the SDR sensor
+  name is kept in full for the "sdr get" fallback (stripping _Temp only for
+  display; a demoted DIMM sensor previously became unreadable), and the raw
+  vs SDR probe check now allows a 5C drift instead of exact equality so a
+  sensor is not wrongly pinned to the slow per-tick path
+
 * Mon Jul 20 2026 SkyWalkerAMD <scka7t@gmail.com> - 3.0.7-1
 - info: BMC-substituted DIMM rows also show each module's current
   temperature, read per sensor via raw Get Sensor Reading with the same

@@ -4,7 +4,7 @@
 
 A **read-only** hardware monitor for Intel and AMD servers and workstations. A single `sckoc` command gives a live per-socket and per-core view covering voltage, temperature, frequency, power and C-state residency; `sckoc info` adds the full static platform report (security state, CPU ratio configuration, power limits, memory and cache). The tool is pure-read by design: it never writes a single MSR, so it works under Secure Boot and kernel lockdown (integrity mode).
 
-**Current version: 3.0.7**
+**Current version: 3.0.8**
 
 ## Design principles
 
@@ -75,11 +75,11 @@ Self-contained: installs dependencies (gcc, dmidecode), compiles the helpers, de
 
 ```bash
 # Fedora: pick the fcNN package matching your release (example: Fedora 44; use the actual filename from the Releases page)
-sudo dnf install -y https://github.com/SkyWalkerAMD/sckoc/releases/download/3.0.7/sckoc-3.0.7-1.fc44.x86_64.rpm
+sudo dnf install -y https://github.com/SkyWalkerAMD/sckoc/releases/download/3.0.8/sckoc-3.0.8-1.fc44.x86_64.rpm
 # Rocky / Alma / RHEL / CentOS Stream: pick the matching elN package (example: EL8); the COPR in option 3 is preferred as it matches your distro automatically
-sudo dnf install -y https://github.com/SkyWalkerAMD/sckoc/releases/download/3.0.7/sckoc-3.0.7-1.el8.x86_64.rpm
+sudo dnf install -y https://github.com/SkyWalkerAMD/sckoc/releases/download/3.0.8/sckoc-3.0.8-1.el8.x86_64.rpm
 # Ubuntu / Debian
-sudo apt install -y https://github.com/SkyWalkerAMD/sckoc/releases/download/3.0.7/sckoc_3.0.7-1_amd64.deb
+sudo apt install -y https://github.com/SkyWalkerAMD/sckoc/releases/download/3.0.8/sckoc_3.0.8-1_amd64.deb
 ```
 
 Note: RPM binaries are tied to the distro that built them (glibc and dependencies differ); fcNN packages do not install on RHEL-family systems and vice versa — pick the asset matching your distribution.
@@ -108,7 +108,7 @@ echo "deb [trusted=yes] https://skywalkeramd.github.io/sckoc/apt stable main" | 
 sudo apt update && sudo apt install sckoc
 ```
 
-Note: both COPR and the apt repo are third-party repositories — adding the source once is the distro's third-party trust mechanism; afterwards `dnf/apt install sckoc` and upgrades behave like any other package. Self-building: deb via `bash packaging/build-deb.sh` (run from the repo root); rpm by fetching the source tarball first: `spectool -g -R packaging/sckoc.spec && rpmbuild -ba packaging/sckoc.spec` (or download Source code (tar.gz) from Releases into `~/rpmbuild/SOURCES/sckoc-3.0.7.tar.gz`). Package installs auto-probe and load k10temp/HSMP modules on AMD but **never run DKMS builds**; platforms that need DKMS (TR PRO 9000WX) should use install.sh or configure it once by hand as described above.
+Note: both COPR and the apt repo are third-party repositories — adding the source once is the distro's third-party trust mechanism; afterwards `dnf/apt install sckoc` and upgrades behave like any other package. Self-building: deb via `bash packaging/build-deb.sh` (run from the repo root); rpm by fetching the source tarball first: `spectool -g -R packaging/sckoc.spec && rpmbuild -ba packaging/sckoc.spec` (or download Source code (tar.gz) from Releases into `~/rpmbuild/SOURCES/sckoc-3.0.8.tar.gz`). Package installs auto-probe and load k10temp/HSMP modules on AMD but **never run DKMS builds**; platforms that need DKMS (TR PRO 9000WX) should use install.sh or configure it once by hand as described above.
 
 ## Usage
 

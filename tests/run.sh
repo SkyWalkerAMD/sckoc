@@ -154,27 +154,39 @@ Memory Device
 OUT
 DMI
 chmod +x "$T/fakedmi"
+# clean, fixed, self-consistent BMC (SDR readings match the raw Get Sensor
+# Reading bytes); also answers "sdr get" so the sdr fallback path is testable
 cat > "$T/fakeipmi" <<'FIP'
 #!/bin/bash
-C="$0.cnt"
 if [ "$1 $2 $3" = "sdr type Temperature" ]; then
 cat <<'TBL'
 CPU Package Temp | 01h |  ok  |  3.0 | 31 degrees C
 VR CPU Temp      | 20h |  ok  |  7.0 | 45 degrees C
 DIMMA1_Temp      | 04h |  ns  |  8.0 | No Reading
 DIMMC1_Temp      | 06h |  ok  |  8.0 | 30 degrees C
-DIMMF1_Temp      | 09h |  ok  |  8.0 | 30 degrees C
+DIMMF1_Temp      | 09h |  ok  |  8.0 | 29 degrees C
 TBL
 elif [ "$1 $2 $3" = "raw 0x04 0x2d" ]; then
-  case "$4" in
-    0x06) echo " 1e 40 40" ;;
-    0x09) echo " 1d 40 40" ;;
-    *) n=$(cat "$C" 2>/dev/null || echo 0); echo $((n+1)) > "$C"
-       if [ "$n" -le 1 ]; then echo " 1f 40 40"; else echo " 21 40 40"; fi ;;
-  esac
+  case "$4" in 0x01) echo " 1f 40 40" ;; 0x06) echo " 1e 40 40" ;; 0x09) echo " 1d 40 40" ;; esac
+elif [ "$1 $2" = "sdr get" ]; then
+  case "$3" in *DIMMC1*) r=30 ;; *DIMMF1*) r=29 ;; *) r=31 ;; esac
+  echo " Sensor Reading        : $r (+/- 0) degrees C"
 fi
 FIP
 chmod +x "$T/fakeipmi"
+# separate BMC whose CPU sensor changes value between reads (31 then 33) - used
+# only to prove a cached refresh does a fresh single-message read, not a replay
+cat > "$T/fakeipmi_chg" <<'FIP'
+#!/bin/bash
+C="$0.cnt"
+if [ "$1 $2 $3" = "sdr type Temperature" ]; then
+  echo "CPU Package Temp | 01h |  ok  |  3.0 | 31 degrees C"
+elif [ "$1 $2 $3" = "raw 0x04 0x2d" ]; then
+  n=$(cat "$C" 2>/dev/null || echo 0); echo $((n+1)) > "$C"
+  if [ "$n" -le 1 ]; then echo " 1f 40 40"; else echo " 21 40 40"; fi
+fi
+FIP
+chmod +x "$T/fakeipmi_chg"
 cat > "$T/slowipmi" <<'FIP'
 #!/bin/bash
 [ "$1 $2 $3" = "sdr type Temperature" ] && { sleep 2; echo "CPU Package Temp | 01h | ok | 3.0 | 31 degrees C"; }
@@ -280,8 +292,10 @@ PYA
   env $IPB bash sckoc > "$T/monb1.out" 2>/dev/null || true
   chk "AMD mon: BMC temp fallback (probe)" "grep -q 'Temp Max 31' '$T/monb1.out' && grep -q '(bmc)' '$T/monb1.out'"
   chk "AMD mon: BMC probe caches sensor id + raw mode" "[ \"\$(cat '$T/bmcc')\" = 'CPU Package Temp|01|raw' ]"
-  env $IPB bash sckoc > "$T/monb2.out" 2>/dev/null || true
-  chk "AMD mon: BMC cached raw single-message read" "grep -q 'Temp Max 33' '$T/monb2.out'"
+  CHGB="MSRVEN=AuthenticAMD MSRFAM=26 INT=1 READOC=$T/readoc READOC_DEV=$T/amd%d.msr DMI=/bin/false UNCSYS=$T/none TPMIU=/nonexistent SMUDRV=$T/none HWROOT=$T/nohw IPMITOOL=$T/fakeipmi_chg BMCCACHE=$T/chgc BMCDIMMS=$T/chgd"
+  env $CHGB bash sckoc > "$T/monc1.out" 2>/dev/null || true   # probe + first read = 31
+  env $CHGB bash sckoc > "$T/monb2.out" 2>/dev/null || true   # cached read = 33
+  chk "AMD mon: BMC cached raw single-message read" "grep -q 'Temp Max 31' '$T/monc1.out' && grep -q 'Temp Max 33' '$T/monb2.out'"
   env $IPB IPMITOOL=$T/slowipmi BMCCACHE=$T/bmslow BMCDIMMS=$T/bmslowd BMCPROBET=1 bash sckoc >/dev/null 2>&1 || true
   chk "AMD mon: slow-BMC timeout is not negative-cached" "[ ! -e '$T/bmslow' ]"
   chk "info: duplicate DIMM locators numbered" "env MSRVEN=AuthenticAMD MSRFAM=26 READOC=$T/readoc READOC_DEV=$T/amd%d.msr SBDIR=$T/sb2 LDF=$T/ld2 DMI=$T/dmidup IPMITOOL=/nonexistent BMCDIMMS=$T/nodimm bash sckoc info | grep -q 'DIMM 0 #2'"

@@ -29,7 +29,7 @@ command -v ipmitool >/dev/null || {
 T=$(mktemp -d); trap 'rm -rf "$T"' EXIT
 cat > "$T/version.h" <<'VER_H'
 /* SPDX-License-Identifier: GPL-2.0-only */
-#define VERSION_STRING "3.2.0"
+#define VERSION_STRING "4.0.0"
 VER_H
 cat > "$T/readoc.c" <<'READOC_C'
 // SPDX-License-Identifier: GPL-2.0-only
@@ -324,6 +324,7 @@ int main(int argc, char *argv[])
 	if (msg.response_sz > 8) msg.response_sz = 8; /* args[] holds at most 8 words */
 	msg.sock_ind = strtoul(argv[3], NULL, 0);
 	msg.num_args = argc - 4;
+	if (msg.num_args > 8) msg.num_args = 8; /* args[] holds at most 8 words */
 	for (i = 4; i < argc && i - 4 < 8; i++) msg.args[i - 4] = strtoul(argv[i], NULL, 0);
 	if (ioctl(fd, HSMP_IOCTL_CMD, &msg) < 0) { perror("hsmp ioctl"); return 2; }
 	for (i = 0; i < msg.response_sz; i++) printf("%u%s", msg.args[i], i + 1 < msg.response_sz ? " " : "\n");
@@ -331,7 +332,7 @@ int main(int argc, char *argv[])
 	return 0;
 }
 HSMP_C
-gcc -std=gnu99 -Wall -O2 "$T/hsmp-msg.c" -o /usr/local/bin/hsmp-msg
+gcc -std=gnu99 -Wall -O2 -D_GNU_SOURCE -D_FILE_OFFSET_BITS=64 "$T/hsmp-msg.c" -o /usr/local/bin/hsmp-msg
 
 cat > "$T/tpmi-uncore.c" <<'TPMI_C'
 /* SPDX-License-Identifier: GPL-2.0-only */
@@ -452,9 +453,12 @@ static int probe_device(const char *root, const char *bdf, int devidx)
 
     /* PFS directory: 8-byte entries at tbl_off. Count comes from the VSEC
      * num_entries byte, but scanning until an all-ones/zero-size entry is
-     * equally safe and avoids re-reading config. Cap at 64.               */
+     * equally safe and avoids re-reading config. Cap at 64. Bound every
+     * access against the BAR size - tbl_off comes from config space, and a
+     * bogus value must degrade to "no data", not SIGBUS.                  */
     int printed = 0;
     for (int e = 0; e < 64; e++) {
+        if (tbl_off + (uint64_t)(e + 1) * 8 > barsz) break;
         uint64_t q = *(volatile uint64_t *)(bar + tbl_off + (size_t)e * 8);
         if ((uint32_t)q == 0xffffffffu) break;
         unsigned id   = q & 0xff;
@@ -497,7 +501,7 @@ cat > /usr/local/bin/sckoc <<'MSR_SH'
 #!/bin/bash
 # SPDX-License-Identifier: GPL-2.0-only
 # sckoc: Intel/AMD read-only hardware monitor (no writes)
-MSRVER=3.2.0
+MSRVER=4.0.0
 # No 'set -e': this is a read-only monitor built from many best-effort MSR
 # reads, and blocks use the `[ cond ] && action` idiom throughout (which
 # returns non-zero when the guard is false). Each block degrades on its own;
@@ -954,22 +958,37 @@ EOFSL
           seen[L[i]]++; nm=L[i]; if(seen[L[i]]>1) nm=L[i] " #" seen[L[i]]
           NAME[i]=nm
           k=slotkey(L[i]); T[i]=(k!="" && (k in bt) && bt[k] ~ /^[0-9]+$/) ? bt[k] : ""
+          # Some boards end the SMBIOS locator in a bare channel letter
+          # (CPU0_DIMM_B) while the BMC names carry a digit (DIMMB1_Temp).
+          # Match on the channel letter when exactly one BMC slot sits on
+          # that channel; ambiguity (two DIMMs per channel) stays blank.
+          if(T[i]=="" && k==""){
+            tc=toupper(L[i])
+            if(match(tc,/[A-Z]$/)){
+              ch=substr(tc,RSTART,1); cnt=0; hit=""
+              for(kk in bt) if(substr(kk,1,1)==ch && bt[kk] ~ /^[0-9]+$/){ cnt++; hit=kk }
+              if(cnt==1) T[i]=bt[hit]
+            }
+          }
         }
         if(T[i]!="") hastemp=1
       }
       hasvddq=(vq!="")
+      # VDDQ column width follows the value: a single rail is "1.39 V",
+      # dual memory-controller rails render as "1.40/1.39 V".
+      vw=8; if(hasvddq && length(vq)+2 > vw) vw=length(vq)+2
       # column table (parallels the per-core panel): a header row, then one aligned
       # row per DIMM. Speed = actual configured rate, JEDEC = SMBIOS nominal rate;
       # the VDDQ and Temp columns appear only when the BMC populates them.
       if(n>0){
         h=sprintf("  %-14s %-11s %-11s", "DIMM", "Speed", "JEDEC")
-        if(hasvddq) h=h sprintf(" %-8s", "VDDQ")
+        if(hasvddq) h=h sprintf(" %-" vw "s", "VDDQ")
         h=h sprintf(" %-8s", "Size")
         if(hastemp) h=h " Temp"
         sub(/ +$/,"",h); print h
         for(i=1;i<=n;i++){
           r=sprintf("  %-14s %-11s %-11s", NAME[i], (SP[i]!=""?SP[i]:"-"), (JS[i]!=""?JS[i]:"-"))
-          if(hasvddq) r=r sprintf(" %-8s", vq " V")
+          if(hasvddq) r=r sprintf(" %-" vw "s", vq " V")
           r=r sprintf(" %-8s", SZ[i])
           if(hastemp) r=r sprintf(" %s", (T[i]!=""?T[i] "°C":""))
           sub(/ +$/,"",r); print r
@@ -1320,26 +1339,36 @@ EOFSL
 # e.g. "1.39" (volts) or nothing. One-shot, cached in /run for the run so the
 # static 'sckoc info' does not rescan. Soft dependency on ipmitool.
 bmc_vddq(){
-  local cache="${BMCVDDQ:-/run/sckoc-bmc-vddq}" v tbl row name
+  local cache="${BMCVDDQ:-/run/sckoc-bmc-vddq}" v tbl row rows rv name
   bmc_prep || return 0
   if [ -s "$cache" ]; then
     v=$(cat "$cache" 2>/dev/null); [ "$v" = none ] && return 0
     printf '%s' "$v"; return 0
   fi
   tbl=$(timeout "${BMCPROBET:-20}" "$BMCIPT" sdr type Voltage 2>/dev/null)
-  row=$(printf '%s\n' "$tbl" | grep -i vddq | head -1)
-  if [ -n "$row" ]; then
-    # reading carried inline in the SDR row: "... | 1.39 Volts | ok"
-    v=$(printf '%s\n' "$row" | grep -oiE '[0-9]+(\.[0-9]+)? +Volts' | head -1 \
-        | grep -oE '[0-9]+(\.[0-9]+)?' | head -1)
-    if [ -z "$v" ]; then
-      # no inline reading -> exact fetch by sensor name (SDR column 1)
-      name=$(printf '%s\n' "$row" | cut -d'|' -f1 | sed 's/[[:space:]]*$//')
-      v=$(timeout "${BMCPROBET:-20}" "$BMCIPT" sdr get "$name" 2>/dev/null \
-          | awk -F': *' '/Sensor Reading/{ n=$2+0; if(n>0) printf "%.2f", n; exit }')
-    fi
+  rows=$(printf '%s\n' "$tbl" | grep -i vddq)
+  # The DRAM rail under its other common name: VCCD (Intel DDR5 memory
+  # VDD, one sensor per memory controller - e.g. "VCCD HV0"/"VCCD HV1"
+  # on W890 boards). Used only when no sensor is literally called VDDQ.
+  [ -z "$rows" ] && rows=$(printf '%s\n' "$tbl" | grep -i vccd)
+  v=""
+  if [ -n "$rows" ]; then
+    while IFS= read -r row; do
+      [ -n "$row" ] || continue
+      # reading carried inline in the SDR row: "... | 1.39 Volts | ok"
+      rv=$(printf '%s\n' "$row" | grep -oiE '[0-9]+(\.[0-9]+)? +Volts' | head -1 \
+          | grep -oE '[0-9]+(\.[0-9]+)?' | head -1)
+      if [ -z "$rv" ]; then
+        # no inline reading -> exact fetch by sensor name (SDR column 1)
+        name=$(printf '%s\n' "$row" | cut -d'|' -f1 | sed 's/[[:space:]]*$//')
+        rv=$(timeout "${BMCPROBET:-20}" "$BMCIPT" sdr get "$name" 2>/dev/null \
+            | awk -F': *' '/Sensor Reading/{ n=$2+0; if(n>0) printf "%.2f", n; exit }')
+      fi
+      case "$rv" in ''|0|0.00|*[!0-9.]*) continue ;; esac
+      v="${v:+$v/}$rv"
+    done <<< "$(printf '%s\n' "$rows" | head -4)"
   fi
-  case "$v" in ''|0|0.00|*[!0-9.]*) echo none > "$cache" 2>/dev/null || true; return 0 ;; esac
+  case "$v" in ''|*[!0-9./]*) echo none > "$cache" 2>/dev/null || true; return 0 ;; esac
   echo "$v" > "$cache" 2>/dev/null || true
   printf '%s' "$v"
 }

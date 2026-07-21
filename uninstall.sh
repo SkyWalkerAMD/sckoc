@@ -26,6 +26,8 @@ rm -f /usr/local/bin/sckoc /usr/local/bin/readoc /usr/local/bin/hsmp-msg /usr/lo
 rm -f /etc/modules-load.d/msr.conf /etc/modules-load.d/sckoc.conf \
       /etc/modules-load.d/sckoc-amd.conf /etc/modules-load.d/sckoc-sensors.conf \
       /usr/lib/modules-load.d/sckoc.conf
+# runtime BMC sensor caches (tmpfs - would clear on reboot anyway)
+rm -f /run/sckoc-*
 # note: modules stay loaded until reboot (hot-unload races with concurrent MSR readers)
 
 # 3b) DKMS amd_hsmp: only if our installer set it up (marker file)

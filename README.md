@@ -1,10 +1,20 @@
+<div align="center">
+
 # sckoc
 
-> English documentation: [README.en.md](README.en.md)
+[![license](https://img.shields.io/badge/license-GPL--2.0-blue)](COPYING)
+![language](https://img.shields.io/badge/language-Bash%20%2B%20C-orange)
+[![stars](https://img.shields.io/github/stars/SkyWalkerAMD/sckoc?logo=github&label=Stars)](https://github.com/SkyWalkerAMD/sckoc/stargazers)
+[![downloads](https://img.shields.io/github/downloads/SkyWalkerAMD/sckoc/total?label=downloads&color=brightgreen)](https://github.com/SkyWalkerAMD/sckoc/releases)
+[![issues](https://img.shields.io/github/issues/SkyWalkerAMD/sckoc?label=issues&color=yellow)](https://github.com/SkyWalkerAMD/sckoc/issues)
+
+[English](README.en.md) | 中文
+
+</div>
 
 面向 Intel 与 AMD 服务器和工作站的**只读**硬件监控软件。`sckoc` 一条命令给出每 Socket 与每核心两层实时视图，覆盖电压、温度、频率、功耗与 C-state 驻留；`sckoc info` 给出静态平台报告（安全状态、CPU 配置比率、功率墙、内存与缓存）。全程不写入任何 MSR，Secure Boot 与 kernel lockdown (integrity) 下可用。
 
-**当前版本: 3.1.0**
+**当前版本: 3.2.0**
 
 ## 设计原则
 
@@ -81,11 +91,11 @@ curl -fsSL https://cdn.jsdelivr.net/gh/SkyWalkerAMD/sckoc@main/install.sh | sudo
 
 ```bash
 # Fedora（示例 fc44，以 Releases 实际文件名为准）
-sudo dnf install -y https://github.com/SkyWalkerAMD/sckoc/releases/download/3.1.0/sckoc-3.1.0-1.fc44.x86_64.rpm
+sudo dnf install -y https://github.com/SkyWalkerAMD/sckoc/releases/download/3.2.0/sckoc-3.2.0-1.fc44.x86_64.rpm
 # Rocky / Alma / RHEL / CentOS Stream（示例 el8；更推荐方式三 COPR）
-sudo dnf install -y https://github.com/SkyWalkerAMD/sckoc/releases/download/3.1.0/sckoc-3.1.0-1.el8.x86_64.rpm
+sudo dnf install -y https://github.com/SkyWalkerAMD/sckoc/releases/download/3.2.0/sckoc-3.2.0-1.el8.x86_64.rpm
 # Ubuntu / Debian
-sudo apt install -y https://github.com/SkyWalkerAMD/sckoc/releases/download/3.1.0/sckoc_3.1.0-1_amd64.deb
+sudo apt install -y https://github.com/SkyWalkerAMD/sckoc/releases/download/3.2.0/sckoc_3.2.0-1_amd64.deb
 ```
 
 **方式三：软件仓库**（添加一次，之后 `dnf/apt install sckoc` 并自动更新）

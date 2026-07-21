@@ -29,7 +29,7 @@ command -v ipmitool >/dev/null || {
 T=$(mktemp -d); trap 'rm -rf "$T"' EXIT
 cat > "$T/version.h" <<'VER_H'
 /* SPDX-License-Identifier: GPL-2.0-only */
-#define VERSION_STRING "3.1.0"
+#define VERSION_STRING "3.2.0"
 VER_H
 cat > "$T/readoc.c" <<'READOC_C'
 // SPDX-License-Identifier: GPL-2.0-only
@@ -125,8 +125,8 @@ static int parse_reg_list(const char *s, uint32_t *out, int max)
 	int n = 0;
 	while (*s) {
 		char *end;
-		unsigned long v = strtoul(s, &end, 0);
-		if (end == s)
+		unsigned long long v = strtoull(s, &end, 0);
+		if (end == s || v > 0xFFFFFFFFULL)
 			return -1;
 		if (n >= max)
 			return -1;
@@ -139,6 +139,26 @@ static int parse_reg_list(const char *s, uint32_t *out, int max)
 			return -1;
 	}
 	return n;
+}
+
+/* READOC_DEV is used as a printf pattern. Accept a fixed path (no
+ * conversion; every CPU maps to the same file - the test suite does
+ * this) or exactly one %d ("%%" escapes are fine). Anything else - a
+ * typo or a hostile value - would reach snprintf as an arbitrary
+ * format string, so fall back to the default. */
+static int dev_fmt_ok(const char *f)
+{
+	int conv = 0;
+	for (; *f; f++) {
+		if (*f != '%')
+			continue;
+		if (f[1] == '%') { f++; continue; }
+		if (f[1] != 'd')
+			return 0;
+		conv++;
+		f++;
+	}
+	return conv <= 1;
 }
 
 int main(int argc, char *argv[])
@@ -161,13 +181,15 @@ int main(int argc, char *argv[])
 				return 127;
 			}
 			break;
-		case 'f':
-			if (sscanf(optarg, "%u:%u", &hi, &lo) != 2 ||
-			    hi > 63 || lo > hi) {
+		case 'f': {
+			int used = 0;
+			if (sscanf(optarg, "%u:%u%n", &hi, &lo, &used) != 2 ||
+			    optarg[used] != '\0' || hi > 63 || lo > hi) {
 				usage(argv[0]);
 				return 127;
 			}
 			break;
+		}
 		case 'u': fmt = FMT_UDEC;      break;
 		case 'x': fmt = FMT_HEX;       break;
 		case 'X': fmt = FMT_HEX_UPPER; break;
@@ -195,7 +217,7 @@ int main(int argc, char *argv[])
 	}
 
 	const char *devfmt = getenv("READOC_DEV");
-	if (!devfmt || !*devfmt)
+	if (!devfmt || !*devfmt || !dev_fmt_ok(devfmt))
 		devfmt = "/dev/cpu/%d/msr";
 
 	/* single mode: exactly one cpu and one register, legacy output */
@@ -475,7 +497,7 @@ cat > /usr/local/bin/sckoc <<'MSR_SH'
 #!/bin/bash
 # SPDX-License-Identifier: GPL-2.0-only
 # sckoc: Intel/AMD read-only hardware monitor (no writes)
-MSRVER=3.1.0
+MSRVER=3.2.0
 # No 'set -e': this is a read-only monitor built from many best-effort MSR
 # reads, and blocks use the `[ cond ] && action` idiom throughout (which
 # returns non-zero when the guard is false). Each block degrades on its own;
@@ -618,7 +640,8 @@ case "${1:-}" in
     rm -f /usr/local/bin/sckoc /usr/local/bin/readoc /usr/local/bin/hsmp-msg /usr/local/bin/tpmi-uncore \
           /etc/bash_completion.d/sckoc \
           /etc/modules-load.d/msr.conf /etc/modules-load.d/sckoc.conf /etc/modules-load.d/sckoc-amd.conf /etc/modules-load.d/sckoc-sensors.conf /usr/lib/modules-load.d/sckoc.conf \
-          /etc/apt/sources.list.d/sckoc.list
+          /etc/apt/sources.list.d/sckoc.list \
+          /run/sckoc-*
     if [ -f /var/lib/sckoc/dkms-amd-hsmp ]; then
       HV=$(cat /var/lib/sckoc/dkms-amd-hsmp)
       dkms remove -m amd_hsmp -v "$HV" --all 2>/dev/null || true
@@ -1760,7 +1783,7 @@ _sckoc(){
 complete -F _sckoc sckoc
 COMP_SH
 
-modprobe msr
+modprobe msr || { echo "== ERROR: cannot load the msr kernel module (kernel built without CONFIG_X86_MSR?) - sckoc needs it =="; exit 1; }
 mkdir -p /etc/modules-load.d && echo msr > /etc/modules-load.d/msr.conf
 
 if [ "$(awk '/vendor_id/{print $3;exit}' /proc/cpuinfo)" = AuthenticAMD ]; then

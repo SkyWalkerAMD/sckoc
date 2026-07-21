@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: GPL-2.0-only
 Name:           sckoc
-Version:        3.1.0
+Version:        3.2.0
 Release:        1%{?dist}
 Summary:        Read-only hardware monitor for Intel/AMD servers
 License:        GPL-2.0-only
@@ -61,7 +61,7 @@ if grep -q AuthenticAMD /proc/cpuinfo 2>/dev/null; then
 fi
 
 %postun
-if [ "$1" = 0 ]; then rm -f /etc/modules-load.d/sckoc-amd.conf; fi
+if [ "$1" = 0 ]; then rm -f /etc/modules-load.d/sckoc-amd.conf /run/sckoc-*; fi
 
 %files
 %license COPYING
@@ -76,6 +76,16 @@ if [ "$1" = 0 ]; then rm -f /etc/modules-load.d/sckoc-amd.conf; fi
 %ghost %{_sysconfdir}/modules-load.d/sckoc-amd.conf
 
 %changelog
+* Tue Jul 21 2026 SkyWalkerAMD <scka7t@gmail.com> - 3.2.0-1
+- readoc: reject register numbers above 32 bits and malformed -f bitfields;
+  a READOC_DEV pattern other than a fixed path or a single %%d now falls
+  back to the default device instead of reaching snprintf as an arbitrary
+  format string
+- ci: the regression suite runs on every push; package builds, the Release
+  upload and the apt repository publish only after tests pass (the apt repo
+  previously published even when tests failed); release runs are
+  single-flight; missing release assets now fail the upload
+
 * Tue Jul 21 2026 SkyWalkerAMD <scka7t@gmail.com> - 3.1.0-1
 - info: per-DIMM memory reworked as a column table (Speed / JEDEC / VDDQ /
   Size, plus Temp when the BMC exposes DIMM sensors), mirroring the per-core

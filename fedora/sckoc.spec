@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: GPL-2.0-only
 Name:           sckoc
-Version:        3.1.0
+Version:        3.2.0
 Release:        %autorelease
 Summary:        Read-only hardware monitor for Intel and AMD servers
 
@@ -61,6 +61,10 @@ head -c2 %{buildroot}%{_bindir}/sckoc | grep -q '#!'
 test -x %{buildroot}%{_libexecdir}/%{name}/hsmp-msg
 test -x %{buildroot}%{_libexecdir}/%{name}/tpmi-uncore
 
+%postun
+# runtime BMC sensor caches under /run (tmpfs); removed on final erase
+if [ $1 -eq 0 ]; then rm -f /run/sckoc-*; fi
+
 %files
 %license COPYING
 %doc README.md
@@ -72,6 +76,16 @@ test -x %{buildroot}%{_libexecdir}/%{name}/tpmi-uncore
 %{_mandir}/man1/sckoc.1*
 
 %changelog
+* Tue Jul 21 2026 SkyWalkerAMD <scka7t@gmail.com> - 3.2.0-1
+- readoc: reject register numbers above 32 bits and malformed -f bitfields;
+  a READOC_DEV pattern other than a fixed path or a single %%d now falls
+  back to the default device instead of reaching snprintf as an arbitrary
+  format string
+- ci: the regression suite runs on every push; package builds, the Release
+  upload and the apt repository publish only after tests pass (the apt repo
+  previously published even when tests failed); release runs are
+  single-flight; missing release assets now fail the upload
+
 * Tue Jul 21 2026 SkyWalkerAMD <scka7t@gmail.com> - 3.1.0-1
 - info: per-DIMM memory reworked as a column table (Speed / JEDEC / VDDQ /
   Size, plus Temp when the BMC exposes DIMM sensors), mirroring the per-core

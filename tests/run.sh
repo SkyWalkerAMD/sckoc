@@ -56,6 +56,9 @@ chk "batch 2cpu x 2reg = 4 lines" "[ \"\$($R -p 0-1 0x100,0x200 | wc -l)\" = 4 ]
 chk "batch cpu1 value"    "$R -p 0-1 0x100 | grep -qx '1 0x100 1111'"
 chk "batch skips missing cpu (rc 0)" "$R -p 0,9 0x100 | grep -qx '0 0x100 1000'"
 chk "batch all-missing rc 4" "$R -p 8,9 0x100 >/dev/null; [ \$? = 4 ]"
+chk "reg > 32bit rejected (rc 127)" "$R -p 0 0x1FFFFFFF1 >/dev/null 2>&1; [ \$? = 127 ]"
+chk "-f trailing junk rejected (rc 127)" "$R -p 0 -f 47:32junk 0x400 >/dev/null 2>&1; [ \$? = 127 ]"
+chk "hostile READOC_DEV pattern falls back to default" "READOC_DEV='$T/evil%s%d.msr' $R -p 0 -u 0x100 2>&1 | grep -vq evil"
 unset READOC_DEV
 
 echo "== t5 uncore paths =="

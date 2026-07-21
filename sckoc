@@ -1,7 +1,7 @@
 #!/bin/bash
 # SPDX-License-Identifier: GPL-2.0-only
 # sckoc: Intel/AMD read-only hardware monitor (no writes)
-MSRVER=3.1.0
+MSRVER=3.2.0
 # No 'set -e': this is a read-only monitor built from many best-effort MSR
 # reads, and blocks use the `[ cond ] && action` idiom throughout (which
 # returns non-zero when the guard is false). Each block degrades on its own;
@@ -144,7 +144,8 @@ case "${1:-}" in
     rm -f /usr/local/bin/sckoc /usr/local/bin/readoc /usr/local/bin/hsmp-msg /usr/local/bin/tpmi-uncore \
           /etc/bash_completion.d/sckoc \
           /etc/modules-load.d/msr.conf /etc/modules-load.d/sckoc.conf /etc/modules-load.d/sckoc-amd.conf /etc/modules-load.d/sckoc-sensors.conf /usr/lib/modules-load.d/sckoc.conf \
-          /etc/apt/sources.list.d/sckoc.list
+          /etc/apt/sources.list.d/sckoc.list \
+          /run/sckoc-*
     if [ -f /var/lib/sckoc/dkms-amd-hsmp ]; then
       HV=$(cat /var/lib/sckoc/dkms-amd-hsmp)
       dkms remove -m amd_hsmp -v "$HV" --all 2>/dev/null || true

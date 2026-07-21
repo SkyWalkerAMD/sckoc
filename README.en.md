@@ -1,10 +1,20 @@
+<div align="center">
+
 # sckoc
 
-> 中文文档 / Chinese documentation: [README.md](README.md)
+[![license](https://img.shields.io/badge/license-GPL--2.0-blue)](COPYING)
+![language](https://img.shields.io/badge/language-Bash%20%2B%20C-orange)
+[![stars](https://img.shields.io/github/stars/SkyWalkerAMD/sckoc?logo=github&label=Stars)](https://github.com/SkyWalkerAMD/sckoc/stargazers)
+[![downloads](https://img.shields.io/github/downloads/SkyWalkerAMD/sckoc/total?label=downloads&color=brightgreen)](https://github.com/SkyWalkerAMD/sckoc/releases)
+[![issues](https://img.shields.io/github/issues/SkyWalkerAMD/sckoc?label=issues&color=yellow)](https://github.com/SkyWalkerAMD/sckoc/issues)
+
+English | [中文](README.md)
+
+</div>
 
 A **read-only** hardware monitor for Intel and AMD servers and workstations. A single `sckoc` command gives a live per-socket and per-core view covering voltage, temperature, frequency, power and C-state residency; `sckoc info` adds the static platform report (security state, CPU ratio configuration, power limits, memory and cache). It never writes an MSR and works under Secure Boot and kernel lockdown (integrity).
 
-**Current version: 3.1.0**
+**Current version: 3.2.0**
 
 ## Design principles
 
@@ -81,11 +91,11 @@ Self-contained: installs dependencies (gcc, dmidecode, ipmitool), builds and dep
 
 ```bash
 # Fedora (fc44 shown; use the actual asset name from Releases)
-sudo dnf install -y https://github.com/SkyWalkerAMD/sckoc/releases/download/3.1.0/sckoc-3.1.0-1.fc44.x86_64.rpm
+sudo dnf install -y https://github.com/SkyWalkerAMD/sckoc/releases/download/3.2.0/sckoc-3.2.0-1.fc44.x86_64.rpm
 # Rocky / Alma / RHEL / CentOS Stream (el8 shown; option 3's COPR is preferred)
-sudo dnf install -y https://github.com/SkyWalkerAMD/sckoc/releases/download/3.1.0/sckoc-3.1.0-1.el8.x86_64.rpm
+sudo dnf install -y https://github.com/SkyWalkerAMD/sckoc/releases/download/3.2.0/sckoc-3.2.0-1.el8.x86_64.rpm
 # Ubuntu / Debian
-sudo apt install -y https://github.com/SkyWalkerAMD/sckoc/releases/download/3.1.0/sckoc_3.1.0-1_amd64.deb
+sudo apt install -y https://github.com/SkyWalkerAMD/sckoc/releases/download/3.2.0/sckoc_3.2.0-1_amd64.deb
 ```
 
 **Option 3: repositories** (add once, then `dnf/apt install sckoc` with automatic updates)

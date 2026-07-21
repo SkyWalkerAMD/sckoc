@@ -22,7 +22,7 @@ command -v dmidecode >/dev/null || {
 T=$(mktemp -d); trap 'rm -rf "$T"' EXIT
 cat > "$T/version.h" <<'VER_H'
 /* SPDX-License-Identifier: GPL-2.0-only */
-#define VERSION_STRING "3.0.8"
+#define VERSION_STRING "3.0.9"
 VER_H
 cat > "$T/readoc.c" <<'READOC_C'
 // SPDX-License-Identifier: GPL-2.0-only
@@ -468,7 +468,7 @@ cat > /usr/local/bin/sckoc <<'MSR_SH'
 #!/bin/bash
 # SPDX-License-Identifier: GPL-2.0-only
 # sckoc: Intel/AMD read-only hardware monitor (no writes)
-MSRVER=3.0.8
+MSRVER=3.0.9
 # No 'set -e': this is a read-only monitor built from many best-effort MSR
 # reads, and blocks use the `[ cond ] && action` idiom throughout (which
 # returns non-zero when the guard is false). Each block degrades on its own;
@@ -1607,8 +1607,10 @@ _sckoc(){
     dump)
       if [ "$cword" -eq 2 ]; then
         # registers sckoc itself decodes, filtered by CPU vendor; hex match is
-        # case-insensitive (both 0xc0010063 and 0xC0010063 complete)
-        local ven intel amd regs w out=()
+        # case-insensitive. Kept portable to old bash (EL7 is 4.2): tr + case
+        # glob instead of the 4.0 ${var,,} expansion, and an explicit array.
+        local ven intel amd regs w wl curl
+        local -a out=()
         ven=$(awk '/vendor_id/{print $3;exit}' /proc/cpuinfo 2>/dev/null)
         intel="0x10 0xCE 0xE7 0xE8 0x194 0x198 0x19C 0x1A2 0x1AD 0x1AE 0x3F9 0x3FD 0x606 0x60D 0x610 0x611 0x614 0x619 0x620 0x621"
         amd="0xC0010015 0xC0010063 0xC0010064 0xC0010065 0xC0010066 0xC0010299 0xC001029A 0xC001029B"
@@ -1617,8 +1619,16 @@ _sckoc(){
           AuthenticAMD) regs=$amd ;;
           *)            regs="$intel $amd" ;;
         esac
-        for w in $regs; do [[ ${w,,} == "${cur,,}"* ]] && out+=("$w"); done
-        [ ${#out[@]} -gt 0 ] && COMPREPLY=("${out[@]}")
+        if [ -z "$cur" ]; then
+          COMPREPLY=($(compgen -W "$regs" -- ""))          # common case: no fork per register
+        else
+          curl=$(printf '%s' "$cur" | tr 'A-Z' 'a-z')
+          for w in $regs; do
+            wl=$(printf '%s' "$w" | tr 'A-Z' 'a-z')
+            case "$wl" in "$curl"*) out+=("$w") ;; esac
+          done
+          [ ${#out[@]} -gt 0 ] && COMPREPLY=("${out[@]}")
+        fi
       elif [ "$cword" -eq 3 ]; then
         # common bitfields: halves, Intel VID 47:32, uncore/ratio fields
         COMPREPLY=($(compgen -W "63:32 47:32 31:16 31:0 21:15 15:0 14:8 7:0 6:0" -- "$cur"))
@@ -1689,6 +1699,12 @@ for m in nct6775 asus_ec_sensors; do modprobe "$m" 2>/dev/null && SENS="$SENS $m
 
 echo "== installed: $(/usr/local/bin/sckoc -V) @ $(awk '/vendor_id/{print $3;exit}' /proc/cpuinfo) =="
 echo "== usage: sckoc | sckoc info | sckoc vid | sckoc uncore | sckoc dump <reg> [hi:lo] | sckoc -V | INT=<sec> sckoc =="
-echo "== tab completion installed (new shells; or: source /etc/bash_completion.d/sckoc) =="
+if [ -r /usr/share/bash-completion/bash_completion ] || [ -r /etc/bash_completion ]; then
+  echo "== tab completion installed (new shells; or: source /etc/bash_completion.d/sckoc) =="
+else
+  echo "== tab completion installed, but 'bash-completion' was not detected =="
+  echo "==   this shell: source /etc/bash_completion.d/sckoc  (subcommands + dump registers work) =="
+  echo "==   full 'dump <reg> <TAB>' bitfield handling wants the bash-completion package =="
+fi
 echo "== first run: =="
 /usr/local/bin/sckoc

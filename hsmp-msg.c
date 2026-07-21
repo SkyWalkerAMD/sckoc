@@ -39,6 +39,7 @@ int main(int argc, char *argv[])
 	if (msg.response_sz > 8) msg.response_sz = 8; /* args[] holds at most 8 words */
 	msg.sock_ind = strtoul(argv[3], NULL, 0);
 	msg.num_args = argc - 4;
+	if (msg.num_args > 8) msg.num_args = 8; /* args[] holds at most 8 words */
 	for (i = 4; i < argc && i - 4 < 8; i++) msg.args[i - 4] = strtoul(argv[i], NULL, 0);
 	if (ioctl(fd, HSMP_IOCTL_CMD, &msg) < 0) { perror("hsmp ioctl"); return 2; }
 	for (i = 0; i < msg.response_sz; i++) printf("%u%s", msg.args[i], i + 1 < msg.response_sz ? " " : "\n");

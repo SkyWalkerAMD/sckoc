@@ -1,2 +1,2 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
-#define VERSION_STRING "3.2.0"
+#define VERSION_STRING "4.0.0"

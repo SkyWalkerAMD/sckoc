@@ -116,9 +116,12 @@ static int probe_device(const char *root, const char *bdf, int devidx)
 
     /* PFS directory: 8-byte entries at tbl_off. Count comes from the VSEC
      * num_entries byte, but scanning until an all-ones/zero-size entry is
-     * equally safe and avoids re-reading config. Cap at 64.               */
+     * equally safe and avoids re-reading config. Cap at 64. Bound every
+     * access against the BAR size - tbl_off comes from config space, and a
+     * bogus value must degrade to "no data", not SIGBUS.                  */
     int printed = 0;
     for (int e = 0; e < 64; e++) {
+        if (tbl_off + (uint64_t)(e + 1) * 8 > barsz) break;
         uint64_t q = *(volatile uint64_t *)(bar + tbl_off + (size_t)e * 8);
         if ((uint32_t)q == 0xffffffffu) break;
         unsigned id   = q & 0xff;

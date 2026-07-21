@@ -14,7 +14,7 @@ English | [中文](README.md)
 
 A **read-only** hardware monitor for Intel and AMD servers and workstations. A single `sckoc` command gives a live per-socket and per-core view covering voltage, temperature, frequency, power and C-state residency; `sckoc info` adds the static platform report (security state, CPU ratio configuration, power limits, memory and cache). It never writes an MSR and works under Secure Boot and kernel lockdown (integrity).
 
-**Current version: 3.2.0**
+**Current version: 4.0.0**
 
 ## Design principles
 
@@ -73,7 +73,7 @@ On fam 1Ah (Zen5) the P-state VID is one socket-wide value and does not equal th
 
 The `sckoc mon` DRAM line is the actual running rate (SMBIOS Configured Speed). The `sckoc info` per-DIMM table columns: **Speed** (actual running rate), **JEDEC** (nominal rate), **VDDQ** (measured rail), **Size**, plus **Temp** where the BMC exposes DIMM temperature sensors; columns without a backing sensor are omitted.
 
-VDDQ is read from a BMC voltage sensor over IPMI (ipmitool) and is one rail for the whole memory subsystem. The SMBIOS Configured Voltage is the JEDEC nominal (1.1 V for all DDR5) and does not reflect the EXPO/XMP setting, so it is not shown. With ryzen_smu installed, `VDDIO_MEM` in `sckoc vid` is a further memory-interface voltage source.
+VDDQ is read over IPMI (ipmitool) from the BMC DRAM-rail sensor (recognised under either the VDDQ or the VCCD naming); boards with one rail per memory controller show both, e.g. `1.40/1.39 V`. The SMBIOS Configured Voltage is the JEDEC nominal (1.1 V for all DDR5) and does not reflect the EXPO/XMP setting, so it is not shown. With ryzen_smu installed, `VDDIO_MEM` in `sckoc vid` is a further memory-interface voltage source.
 
 ## Installation
 
@@ -91,11 +91,11 @@ Self-contained: installs dependencies (gcc, dmidecode, ipmitool), builds and dep
 
 ```bash
 # Fedora (fc44 shown; use the actual asset name from Releases)
-sudo dnf install -y https://github.com/SkyWalkerAMD/sckoc/releases/download/3.2.0/sckoc-3.2.0-1.fc44.x86_64.rpm
+sudo dnf install -y https://github.com/SkyWalkerAMD/sckoc/releases/download/4.0.0/sckoc-4.0.0-1.fc44.x86_64.rpm
 # Rocky / Alma / RHEL / CentOS Stream (el8 shown; option 3's COPR is preferred)
-sudo dnf install -y https://github.com/SkyWalkerAMD/sckoc/releases/download/3.2.0/sckoc-3.2.0-1.el8.x86_64.rpm
+sudo dnf install -y https://github.com/SkyWalkerAMD/sckoc/releases/download/4.0.0/sckoc-4.0.0-1.el8.x86_64.rpm
 # Ubuntu / Debian
-sudo apt install -y https://github.com/SkyWalkerAMD/sckoc/releases/download/3.2.0/sckoc_3.2.0-1_amd64.deb
+sudo apt install -y https://github.com/SkyWalkerAMD/sckoc/releases/download/4.0.0/sckoc_4.0.0-1_amd64.deb
 ```
 
 **Option 3: repositories** (add once, then `dnf/apt install sckoc` with automatic updates)

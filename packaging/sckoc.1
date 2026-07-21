@@ -1,5 +1,5 @@
 .\" SPDX-License-Identifier: GPL-2.0-only
-.TH SCKOC 1 "July 2026" "sckoc 3.0.12" "User Commands"
+.TH SCKOC 1 "July 2026" "sckoc 3.1.0" "User Commands"
 .SH NAME
 sckoc \- read-only MSR/HSMP hardware monitor for Intel and AMD systems
 .SH SYNOPSIS
@@ -143,6 +143,12 @@ measurements (default: 1).
 Override the path to the
 .BR dmidecode (8)
 executable.
+.TP
+.B IPMITOOL
+Override the path to the
+.BR ipmitool (1)
+executable (BMC side-band: DIMM/CPU temperatures and the measured DRAM
+VDDQ rail).
 .TP
 .B READOC
 Override the path to the

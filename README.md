@@ -4,7 +4,7 @@
 
 面向 Intel 与 AMD 服务器和工作站的**只读**硬件监控软件。`sckoc` 一条命令给出每 Socket 与每核心两层实时视图，覆盖电压、温度、频率、功耗与 C-state 驻留；`sckoc info` 给出完整的静态平台报告（安全状态、CPU 配置比率、功率墙、内存与缓存等）。软件采用纯读取设计，全程不写入任何 MSR，因此在 Secure Boot 与 kernel lockdown (integrity) 环境下均可正常工作。
 
-**当前版本: 3.0.12**
+**当前版本: 3.1.0**
 
 ## 设计原则
 
@@ -20,7 +20,7 @@
 
 ## 功能
 
-**平台配置（`sckoc info`）**：一份完整的静态平台报告——安全状态（Secure Boot、kernel lockdown、OC Lock）、HT/SMT 与 NUMA 拓扑、SMU 固件（AMD）；CPU 型号与配置比率上限（base / 最高能效 / 最低比率）及 0xCE 可编程位；Turbo 比率限制 bins；热配置（TjMax、TCC/PROCHOT 偏移）；RAPL 功率墙（PL1/PL2 含时间窗与锁）与封装功耗封套（TDP/最小/最大）；逐 DIMM 内存配置；缓存拓扑。监控面板只保留关键实时数据，以上静态项自 2.5.0 起移入 `sckoc info`；无 msr 模块时 MSR 相关块各自降级
+**平台配置（`sckoc info`）**：一份完整的静态平台报告——安全状态（Secure Boot、kernel lockdown、OC Lock）、HT/SMT 与 NUMA 拓扑、SMU 固件（AMD）；CPU 型号与配置比率上限（base / 最高能效 / 最低比率）及 0xCE 可编程位；Turbo 比率限制 bins；热配置（TjMax、TCC/PROCHOT 偏移）；RAPL 功率墙（PL1/PL2 含时间窗与锁）与封装功耗封套（TDP/最小/最大）；逐 DIMM 内存表格（含实测 VDDQ 电压）；缓存拓扑。监控面板只保留关键实时数据，以上静态项自 2.5.0 起移入 `sckoc info`；无 msr 模块时 MSR 相关块各自降级
 
 **每 Socket**：
 
@@ -77,11 +77,11 @@ curl -fsSL https://cdn.jsdelivr.net/gh/SkyWalkerAMD/sckoc@main/install.sh | sudo
 
 ```bash
 # Fedora：下载与你的版本匹配的 fcNN 包（示例为 Fedora 44，文件名以 Releases 页实际为准）
-sudo dnf install -y https://github.com/SkyWalkerAMD/sckoc/releases/download/3.0.12/sckoc-3.0.12-1.fc44.x86_64.rpm
+sudo dnf install -y https://github.com/SkyWalkerAMD/sckoc/releases/download/3.1.0/sckoc-3.1.0-1.fc44.x86_64.rpm
 # Rocky / Alma / RHEL / CentOS Stream：下载对应 elN 包（示例为 EL8）；更推荐方式三的 COPR，自动匹配发行版
-sudo dnf install -y https://github.com/SkyWalkerAMD/sckoc/releases/download/3.0.12/sckoc-3.0.12-1.el8.x86_64.rpm
+sudo dnf install -y https://github.com/SkyWalkerAMD/sckoc/releases/download/3.1.0/sckoc-3.1.0-1.el8.x86_64.rpm
 # Ubuntu / Debian
-sudo apt install -y https://github.com/SkyWalkerAMD/sckoc/releases/download/3.0.12/sckoc_3.0.12-1_amd64.deb
+sudo apt install -y https://github.com/SkyWalkerAMD/sckoc/releases/download/3.1.0/sckoc_3.1.0-1_amd64.deb
 ```
 
 注：RPM 二进制包与构建它的发行版绑定（glibc/依赖不同），fcNN 包装不进 RHEL 系，elN 包也装不进 Fedora，请按发行版取对应资产。
@@ -110,7 +110,7 @@ echo "deb [trusted=yes] https://skywalkeramd.github.io/sckoc/apt stable main" | 
 sudo apt update && sudo apt install sckoc
 ```
 
-注：COPR 与 apt 均为第三方仓库，需先添加源再安装，这是发行版的第三方源信任机制，添加一次之后 `dnf/apt install sckoc` 与后续升级即和普通软件一致。自行构建：deb 用 `bash packaging/build-deb.sh`（仓库根目录执行）；rpm 先取源码包再构建：`spectool -g -R packaging/sckoc.spec && rpmbuild -ba packaging/sckoc.spec`（或从 Releases 下载 Source code (tar.gz) 放入 `~/rpmbuild/SOURCES/sckoc-3.0.12.tar.gz`）。软件包安装时在 AMD 平台自动探测加载 k10temp/HSMP 模块，但**不执行 DKMS 编译**，TR PRO 9000WX 等需 DKMS 的平台请用 install.sh 或参照上节手动配置一次。
+注：COPR 与 apt 均为第三方仓库，需先添加源再安装，这是发行版的第三方源信任机制，添加一次之后 `dnf/apt install sckoc` 与后续升级即和普通软件一致。自行构建：deb 用 `bash packaging/build-deb.sh`（仓库根目录执行）；rpm 先取源码包再构建：`spectool -g -R packaging/sckoc.spec && rpmbuild -ba packaging/sckoc.spec`（或从 Releases 下载 Source code (tar.gz) 放入 `~/rpmbuild/SOURCES/sckoc-3.1.0.tar.gz`）。软件包安装时在 AMD 平台自动探测加载 k10temp/HSMP 模块，但**不执行 DKMS 编译**，TR PRO 9000WX 等需 DKMS 的平台请用 install.sh 或参照上节手动配置一次。
 
 ## 使用
 
@@ -132,7 +132,7 @@ sudo watch -n 3 sckoc         # 持续刷新
 各子命令说明：
 
 - `mon`（默认）：关键实时面板（每 Socket 概览 + CPU 区块 + 每核心表）；逐核温度距 TjMax 不足 10°C 的行以 `!` 标出；加 `--json` 输出机器可读 v1（schema `sckoc-mon-v1`，含 socket 与逐核核心字段，不随文本面板瘦身变化）
-- `info`：完整静态平台报告（不随负载变、从 mon 面板移出按需查看）——安全状态（Secure Boot / lockdown / OC Lock / HT(SMT) / NUMA / SMU 固件）、CPU 型号与配置比率上限（base / 最高能效 / 最低比率）及 0xCE 可编程位、Turbo 比率限制 bins、热配置（TjMax 与 TCC/PROCHOT 偏移）、RAPL 功率墙（含时间窗与锁）与封装功耗封套（TDP/最小/最大）、逐 DIMM 内存配置（BMC 暴露 DIMM 温度传感器时逐条显示温度：SMBIOS 槽名无信息、全部相同时以 BMC 传感器名还原真实槽名；槽名有效时保留 SMBIOS 名、按槽位标识 `DIMMA1↔CPU0_DIMM_A1` 匹配追加温度）、缓存拓扑；MSR 相关块无 msr 模块时各自降级
+- `info`：完整静态平台报告（不随负载变、从 mon 面板移出按需查看）——安全状态（Secure Boot / lockdown / OC Lock / HT(SMT) / NUMA / SMU 固件）、CPU 型号与配置比率上限（base / 最高能效 / 最低比率）及 0xCE 可编程位、Turbo 比率限制 bins、热配置（TjMax 与 TCC/PROCHOT 偏移）、RAPL 功率墙（含时间窗与锁）与封装功耗封套（TDP/最小/最大）、逐 DIMM 内存表格（列：Speed 实际运行频率 / JEDEC 标称频率 / VDDQ 实测电压 / Size 容量，BMC 暴露 DIMM 温度传感器时另有 Temp 列；SMBIOS 槽名无信息、全部相同时以 BMC 传感器名还原真实槽名，槽名有效时保留 SMBIOS 名、按槽位标识 `DIMMA1↔CPU0_DIMM_A1` 匹配温度）、缓存拓扑；MSR 相关块无 msr 模块时各自降级
 - `vid`：Intel 显示逐核 `0x198` VID 请求电压（PCU/FIVR 目标值，未含掉压，非实测；固件按核编程时各核可不同，包级平台各核同值），AMD 显示逐 rail 真实电压（已收录主板，标注 `Vcore`）或 P-state 标称值（标注 `VID`）。原名 `vcore` 保留为弃用别名
 - `uncore`：逐 domain 显示 uncore/mesh 频率限制（仅 Intel）；sysfs 路径下同时显示 BIOS 开机值（`initial_*_freq_khz`），运行时限制被改过会以 `*` 标出；MSR/TPMI 降级路径无开机值概念，该两列显示 `-`；加 `--json` 输出 `sckoc-uncore-v1`；sysfs 驱动可用时本命令不依赖 msr 模块
 - `dump <reg> [hi:lo]`：在每个 socket 上读取指定 MSR，可选 `hi:lo` 只取位段，例如 `dump 0x198 47:32`

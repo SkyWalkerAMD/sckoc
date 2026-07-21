@@ -4,7 +4,7 @@
 
 A **read-only** hardware monitor for Intel and AMD servers and workstations. A single `sckoc` command gives a live per-socket and per-core view covering voltage, temperature, frequency, power and C-state residency; `sckoc info` adds the full static platform report (security state, CPU ratio configuration, power limits, memory and cache). The tool is pure-read by design: it never writes a single MSR, so it works under Secure Boot and kernel lockdown (integrity mode).
 
-**Current version: 3.0.12**
+**Current version: 3.1.0**
 
 ## Design principles
 
@@ -20,7 +20,7 @@ A **read-only** hardware monitor for Intel and AMD servers and workstations. A s
 
 ## Features
 
-**Platform configuration (`sckoc info`)**: a full static platform report - security state (Secure Boot, kernel lockdown, OC Lock), HT/SMT and NUMA topology, SMU firmware (AMD); CPU identity with the configured ratio ceilings (base / max-efficiency / min) and the 0xCE programmable flags; turbo ratio limit bins; thermal config (TjMax, TCC/PROCHOT offset); RAPL power limits (PL1/PL2 with time windows and lock) and the package power envelope (TDP/min/max); per-DIMM memory config; cache topology. The monitor panel keeps key live data only; since 2.5.0 these static items live under `sckoc info`, and the MSR-backed blocks degrade individually without the msr module
+**Platform configuration (`sckoc info`)**: a full static platform report - security state (Secure Boot, kernel lockdown, OC Lock), HT/SMT and NUMA topology, SMU firmware (AMD); CPU identity with the configured ratio ceilings (base / max-efficiency / min) and the 0xCE programmable flags; turbo ratio limit bins; thermal config (TjMax, TCC/PROCHOT offset); RAPL power limits (PL1/PL2 with time windows and lock) and the package power envelope (TDP/min/max); per-DIMM memory table (with the measured VDDQ rail); cache topology. The monitor panel keeps key live data only; since 2.5.0 these static items live under `sckoc info`, and the MSR-backed blocks degrade individually without the msr module
 
 **Per socket**:
 
@@ -75,11 +75,11 @@ Self-contained: installs dependencies (gcc, dmidecode), compiles the helpers, de
 
 ```bash
 # Fedora: pick the fcNN package matching your release (example: Fedora 44; use the actual filename from the Releases page)
-sudo dnf install -y https://github.com/SkyWalkerAMD/sckoc/releases/download/3.0.12/sckoc-3.0.12-1.fc44.x86_64.rpm
+sudo dnf install -y https://github.com/SkyWalkerAMD/sckoc/releases/download/3.1.0/sckoc-3.1.0-1.fc44.x86_64.rpm
 # Rocky / Alma / RHEL / CentOS Stream: pick the matching elN package (example: EL8); the COPR in option 3 is preferred as it matches your distro automatically
-sudo dnf install -y https://github.com/SkyWalkerAMD/sckoc/releases/download/3.0.12/sckoc-3.0.12-1.el8.x86_64.rpm
+sudo dnf install -y https://github.com/SkyWalkerAMD/sckoc/releases/download/3.1.0/sckoc-3.1.0-1.el8.x86_64.rpm
 # Ubuntu / Debian
-sudo apt install -y https://github.com/SkyWalkerAMD/sckoc/releases/download/3.0.12/sckoc_3.0.12-1_amd64.deb
+sudo apt install -y https://github.com/SkyWalkerAMD/sckoc/releases/download/3.1.0/sckoc_3.1.0-1_amd64.deb
 ```
 
 Note: RPM binaries are tied to the distro that built them (glibc and dependencies differ); fcNN packages do not install on RHEL-family systems and vice versa — pick the asset matching your distribution.
@@ -108,7 +108,7 @@ echo "deb [trusted=yes] https://skywalkeramd.github.io/sckoc/apt stable main" | 
 sudo apt update && sudo apt install sckoc
 ```
 
-Note: both COPR and the apt repo are third-party repositories — adding the source once is the distro's third-party trust mechanism; afterwards `dnf/apt install sckoc` and upgrades behave like any other package. Self-building: deb via `bash packaging/build-deb.sh` (run from the repo root); rpm by fetching the source tarball first: `spectool -g -R packaging/sckoc.spec && rpmbuild -ba packaging/sckoc.spec` (or download Source code (tar.gz) from Releases into `~/rpmbuild/SOURCES/sckoc-3.0.12.tar.gz`). Package installs auto-probe and load k10temp/HSMP modules on AMD but **never run DKMS builds**; platforms that need DKMS (TR PRO 9000WX) should use install.sh or configure it once by hand as described above.
+Note: both COPR and the apt repo are third-party repositories — adding the source once is the distro's third-party trust mechanism; afterwards `dnf/apt install sckoc` and upgrades behave like any other package. Self-building: deb via `bash packaging/build-deb.sh` (run from the repo root); rpm by fetching the source tarball first: `spectool -g -R packaging/sckoc.spec && rpmbuild -ba packaging/sckoc.spec` (or download Source code (tar.gz) from Releases into `~/rpmbuild/SOURCES/sckoc-3.1.0.tar.gz`). Package installs auto-probe and load k10temp/HSMP modules on AMD but **never run DKMS builds**; platforms that need DKMS (TR PRO 9000WX) should use install.sh or configure it once by hand as described above.
 
 ## Usage
 
@@ -130,7 +130,7 @@ Tab completion covers the subcommands (mon/info/vid/uncore/dump/uninstall/help/v
 Subcommands:
 
 - `mon` (default): the key live panel (per-socket overview + CPU block + per-core table); per-core rows within 10 °C of TjMax are flagged with `!`; with `--json` prints a machine-readable v1 document (schema `sckoc-mon-v1`) carrying the socket and per-core essentials, unaffected by the text-panel slimming
-- `info`: the full static platform report (everything runtime-invariant, kept out of the live panel) - security state (Secure Boot / lockdown / OC Lock / HT(SMT) / NUMA / SMU firmware), CPU identity with the configured ratio ceilings (base / max-efficiency / min) and the 0xCE programmable flags, turbo ratio limit bins, thermal config (TjMax and TCC/PROCHOT offset), RAPL power limits (with time windows and lock) and the package power envelope (TDP/min/max), per-DIMM memory config (when the SMBIOS locators carry no information - all identical - when the BMC exposes DIMM temperature sensors, each module's current temperature is shown: if the SMBIOS locators carry no information (all identical) the real slot names are recovered from the sensor names; if they are meaningful the SMBIOS name is kept and the temperature is matched by slot designator (DIMMA1 <-> CPU0_DIMM_A1)) and cache topology; the MSR-backed blocks degrade individually without the msr module
+- `info`: the full static platform report (everything runtime-invariant, kept out of the live panel) - security state (Secure Boot / lockdown / OC Lock / HT(SMT) / NUMA / SMU firmware), CPU identity with the configured ratio ceilings (base / max-efficiency / min) and the 0xCE programmable flags, turbo ratio limit bins, thermal config (TjMax and TCC/PROCHOT offset), RAPL power limits (with time windows and lock) and the package power envelope (TDP/min/max), per-DIMM memory table (columns: Speed = actual running rate, JEDEC = nominal rate, VDDQ = measured rail, Size, plus Temp when the BMC exposes DIMM temperature sensors; blank SMBIOS locators - all identical - are recovered from the BMC sensor names, meaningful ones are kept with the temperature matched by slot designator, DIMMA1 <-> CPU0_DIMM_A1) and cache topology; the MSR-backed blocks degrade individually without the msr module
 - `vid`: Intel shows the per-core `0x198` VID request voltage (the PCU/FIVR target, droop not included — not a measurement; cores can differ where firmware programs them individually, package-scope parts show one value); AMD shows real per-rail voltages (supported boards, labelled `Vcore`) or the P-state nominal value (labelled `VID`). The former name `vcore` remains as a deprecated alias
 - `uncore`: per-domain uncore/mesh frequency limits (Intel only); on the sysfs path it also shows the BIOS boot values (`initial_*_freq_khz`) and flags runtime-changed limits with `*`; the MSR/TPMI fallback paths have no boot-value concept and show `-` in those columns; with `--json` prints schema `sckoc-uncore-v1`; when the sysfs driver is present this command works without the msr module
 - `dump <reg> [hi:lo]`: read the given MSR on every socket, optionally extracting the `hi:lo` bitfield, e.g. `dump 0x198 47:32`

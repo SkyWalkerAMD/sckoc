@@ -19,10 +19,17 @@ command -v dmidecode >/dev/null || {
   { command -v dnf >/dev/null && dnf -y install dmidecode; } || { command -v yum >/dev/null && yum -y install dmidecode; } || { command -v apt-get >/dev/null && apt-get -y install dmidecode; } || true
 } 2>/dev/null
 
+# ipmitool enables the BMC temperature path (CPU + per-DIMM) with no kernel
+# driver. Best-effort: try to install it, but never fail the whole install if
+# it cannot be had (e.g. an EOL repo) - sckoc degrades gracefully without it.
+command -v ipmitool >/dev/null || {
+  { command -v dnf >/dev/null && dnf -y install ipmitool; } || { command -v yum >/dev/null && yum -y install ipmitool; } || { command -v apt-get >/dev/null && apt-get -y install ipmitool; } || true
+} 2>/dev/null
+
 T=$(mktemp -d); trap 'rm -rf "$T"' EXIT
 cat > "$T/version.h" <<'VER_H'
 /* SPDX-License-Identifier: GPL-2.0-only */
-#define VERSION_STRING "3.0.9"
+#define VERSION_STRING "3.0.12"
 VER_H
 cat > "$T/readoc.c" <<'READOC_C'
 // SPDX-License-Identifier: GPL-2.0-only
@@ -468,7 +475,7 @@ cat > /usr/local/bin/sckoc <<'MSR_SH'
 #!/bin/bash
 # SPDX-License-Identifier: GPL-2.0-only
 # sckoc: Intel/AMD read-only hardware monitor (no writes)
-MSRVER=3.0.9
+MSRVER=3.0.12
 # No 'set -e': this is a read-only monitor built from many best-effort MSR
 # reads, and blocks use the `[ cond ] && action` idiom throughout (which
 # returns non-zero when the guard is false). Each block degrades on its own;
@@ -486,6 +493,30 @@ declare -A SNAP
 declare -A BASEM   # per-socket base MHz, filled by mon() for the CPU block
 snap_load(){ local c r v; while read -r c r v; do case "$v" in ''|*[!0-9]*) continue ;; esac; SNAP["$c:$r:$3"]=$v; done < <("$READOC" -p "$1" "$2" 2>/dev/null); }
 sv(){ printf '%s' "${SNAP["$1:$2:$3"]:-0}"; }
+# per-CPU interrupt counts, IRQ["cpu:phase"], summed across every line of
+# /proc/interrupts (all IRQ sources) at T0 and T1; the delta is the number of
+# interrupts that CPU serviced during the sampling window. Header maps column
+# position -> CPU number (robust to offline CPUs); rows with fewer than the
+# CPU-count columns (ERR:/MIS: totals) are skipped. Pure read of a procfs file,
+# no driver needed. IRQSRC overridable for tests.
+declare -A IRQ
+irq_snap(){  # $1 = phase (T0/T1)
+  local cpu sum
+  while read -r cpu sum; do [ -n "$cpu" ] && IRQ["$cpu:$1"]=$sum; done < <(
+    awk 'NR==1{for(i=1;i<=NF;i++){c=$i;sub(/^CPU/,"",c);col[i]=c;n=i};next}
+         NF>n{for(i=1;i<=n;i++)s[col[i]]+=$(i+1)}
+         END{for(c in s)print c,s[c]}' "${IRQSRC:-/proc/interrupts}" 2>/dev/null)
+}
+# interrupts serviced during the window by a core = sum of the delta over its
+# hardware threads; prints the count, or "-" when the procfs read was empty.
+irq_delta(){  # $1 = space-separated sibling CPU list
+  local t d0 d1 tot=0 got=0
+  for t in $1; do
+    d0=${IRQ["$t:T0"]:-}; d1=${IRQ["$t:T1"]:-}
+    [ -n "$d0" ] && [ -n "$d1" ] && { tot=$(( tot + d1 - d0 )); got=1; }
+  done
+  [ "$got" = 1 ] && printf '%d' "$tot" || printf '-'
+}
 sk(){ [ -n "${SNAP["$1:$2:$3"]+x}" ]; }
 
 # --- ryzen_smu PM-table fallback (read-only) ---------------------------------
@@ -664,12 +695,14 @@ board_vcore(){
   done
   return 1
 }
-# DRAM speed/voltage summary from SMBIOS; sets the global DRAMSPD used by the
-# per-socket rows.
+# DRAM speed summary from SMBIOS; sets the global DRAMSPD used by the
+# per-socket rows. Only the configured (actual running) transfer rate - the
+# SMBIOS "Configured Voltage" is a JEDEC nominal (e.g. 1.1 V) that never
+# reflects the real rail, so it is not shown here (the measured VDDQ appears
+# under 'sckoc info' instead).
 dram_speed(){
   DRAMSPD=$( (${DMI:-dmidecode} -t 17 2>/dev/null || :) | awk -F": " '
-    /Configured Memory Speed: [0-9]/{spd=$2}
-    /Configured Voltage:/{ if(spd!=""){ v=($2 ~ /^[0-9]/) ? " @ " $2 : ""; c[spd v]++; spd="" } }
+    /Configured Memory Speed: [0-9]/{ c[$2]++ }
     END{n=0; for(k in c){printf "%s%s (%d DIMMs)",(n++?", ":""),k,c[k]}}')
   [ -z "$DRAMSPD" ] && DRAMSPD="N/A (need dmidecode)"
 }
@@ -865,29 +898,58 @@ dram_detail(){
 $(bmc_dimm_slots)
 EOFSL
   slots=${slots# }; temps=${temps# }
-  out=$( (${DMI:-dmidecode} -t 17 2>/dev/null || :) | awk -v slots="$slots" -v temps="$temps" '
-    BEGIN{ nslot=split(slots, slot, " "); split(temps, tt, " ") }
+  local vq; vq=$(bmc_vddq)   # measured DRAM VDDQ (one platform-wide rail), trails each DIMM's frequency
+  out=$( (${DMI:-dmidecode} -t 17 2>/dev/null || :) | awk -v slots="$slots" -v temps="$temps" -v vq="$vq" '
     function val(s){ sub(/.*:[ \t]*/, "", s); return s }
-    /^Memory Device/{loc="";sz="";sp="";v="";inblk=1;next}
+    # slot designator = trailing letter+digits (CPU0_DIMM_A1 -> A1, DIMMA1 -> A1)
+    function slotkey(x,  t){ t=toupper(x); if(match(t,/[A-Z][0-9]+$/)) return substr(t,RSTART); return "" }
+    function stash(){ if(inblk && sz!="" && sz !~ /No Module/){ n++; L[n]=loc; SP[n]=sp; JS[n]=js; SZ[n]=sz; if(n==1) first=loc; else if(loc!=first) mixed=1 } }
+    BEGIN{ nslot=split(slots, slot, " "); split(temps, tt, " ")
+           for(j=1;j<=nslot;j++){ k=slotkey(slot[j]); if(k!="") bt[k]=tt[j] } }
+    /^Memory Device/{loc="";sz="";sp="";js="";inblk=1;next}
     inblk && /Bank Locator:/{next}
     inblk && /Locator:/{loc=val($0)}
     inblk && /Size:[ \t]*[0-9]/{sz=val($0)}
     inblk && /Configured Memory Speed:[ \t]*[0-9]/{sp=val($0)}
-    inblk && /Configured Voltage:[ \t]*[0-9]/{v=val($0)}
-    function stash(){ if(inblk && sz!="" && sz !~ /No Module/){ n++; L[n]=loc; SP[n]=sp; VV[n]=(v==""?"?":v); SZ[n]=sz; if(n==1) first=loc; else if(loc!=first) mixed=1 } }
+    inblk && /^[ \t]*Speed:[ \t]*[0-9]/{js=val($0)}
     /^$/{ stash(); inblk=0 }
     END{ stash()
-      # SMBIOS locators with no information (all identical) + a matching
-      # count of BMC-populated slots: show the real slot names instead.
-      usebmc = (n>0 && !mixed && n==nslot)
+      # Branch B: SMBIOS locators carry no information (all identical) and the
+      # count matches the BMC-populated slots -> substitute real names, and
+      # append the temp (whole DIMM identity comes from the BMC).
+      usebmc = (n>0 && !mixed && n==nslot && nslot>0)
+      # first pass: resolve display name + per-DIMM temp; note which optional columns carry data
+      hastemp=0
       for(i=1;i<=n;i++){
-        l=L[i]
         if(usebmc){
-          l=slot[i] " (bmc)"
-          if(tt[i] ~ /^[0-9]+$/) { printf "  %-14s %-11s @ %-7s %-8s %s°C\n", l, SP[i], VV[i], SZ[i], tt[i]; continue }
+          NAME[i]=slot[i]
+          T[i]=(tt[i] ~ /^[0-9]+$/) ? tt[i] : ""
+        } else {
+          # Branch A: locators are meaningful -> keep the SMBIOS name, and
+          # append the BMC temp whose slot designator matches this locator.
+          seen[L[i]]++; nm=L[i]; if(seen[L[i]]>1) nm=L[i] " #" seen[L[i]]
+          NAME[i]=nm
+          k=slotkey(L[i]); T[i]=(k!="" && (k in bt) && bt[k] ~ /^[0-9]+$/) ? bt[k] : ""
         }
-        else { seen[L[i]]++; if(seen[L[i]]>1) l=L[i] " #" seen[L[i]] }
-        printf "  %-14s %-11s @ %-7s %s\n", l, SP[i], VV[i], SZ[i]
+        if(T[i]!="") hastemp=1
+      }
+      hasvddq=(vq!="")
+      # column table (parallels the per-core panel): a header row, then one aligned
+      # row per DIMM. Speed = actual configured rate, JEDEC = SMBIOS nominal rate;
+      # the VDDQ and Temp columns appear only when the BMC populates them.
+      if(n>0){
+        h=sprintf("  %-14s %-11s %-11s", "DIMM", "Speed", "JEDEC")
+        if(hasvddq) h=h sprintf(" %-8s", "VDDQ")
+        h=h sprintf(" %-8s", "Size")
+        if(hastemp) h=h " Temp"
+        sub(/ +$/,"",h); print h
+        for(i=1;i<=n;i++){
+          r=sprintf("  %-14s %-11s %-11s", NAME[i], (SP[i]!=""?SP[i]:"-"), (JS[i]!=""?JS[i]:"-"))
+          if(hasvddq) r=r sprintf(" %-8s", vq " V")
+          r=r sprintf(" %-8s", SZ[i])
+          if(hastemp) r=r sprintf(" %s", (T[i]!=""?T[i] "°C":""))
+          sub(/ +$/,"",r); print r
+        }
       }
     }')
   [ -n "$out" ] && { echo "== Memory (per DIMM) =="; printf '%s\n' "$out"; }
@@ -1098,7 +1160,8 @@ intel_sock(){
   thr=""; [ "$(bits "$v19c" 0 1)" = 1 ] && thr="  [THROTTLING!]"; [ -z "$thr" ] && [ "$(bits "$v19c" 1 1)" = 1 ] && thr="  [Throttle-Log]"
   printf "  S%s  VID %s V  Temp Max %d°C (TjMax %d°C)%s\n" "$1" "$(wt4 "$(bits "$v198" 32 16)/8192")" "$mx" "$tj" "$thr"
   printf "      Core %d00 MHz  %s\n" "$(bits "$v198" 8 8)" "$un"
-  printf "      DRAM %s\n" "$DRAMSPD"
+  local mmx; mmx=$(bmc_dimm_max); [ -n "$mmx" ] && mmx="  Mem Max $mmx"
+  printf "      DRAM %s%s\n" "$DRAMSPD" "$mmx"
   printf "      Pkg %s W  DRAM %s W%s\n" "$(wt "$de/2^$eu/$INT")" "$(wt "$dd/2^$eu/$INT")" "$pcs"
 }
 
@@ -1188,7 +1251,7 @@ EOFTBL
   { [ -n "$dimm" ] && printf '%s' "$dimm" | sort || echo none; } > "$dc" 2>/dev/null || true
   return 0
 }
-bmc_temp(){  # $1 = socket index; prints e.g. "31°C (bmc)" or returns 1
+bmc_temp(){  # $1 = socket index; prints e.g. "31°C" or returns 1
   local so=$1 cache="${BMCCACHE:-/run/sckoc-bmc}" dcache="${BMCDIMMS:-/run/sckoc-bmc-dimm}"
   bmc_prep || return 1
   local line t
@@ -1199,7 +1262,7 @@ bmc_temp(){  # $1 = socket index; prints e.g. "31°C (bmc)" or returns 1
   [ -n "$line" ] && [ "$line" != none ] || return 1
   t=$(bmc_read_sensor "${line%%|*}" "$(printf '%s' "$line" | cut -d'|' -f2)" "${line##*|}")
   [ -n "$t" ] || return 1
-  printf "%d°C (bmc)" "$t"
+  printf "%d°C" "$t"
 }
 bmc_dimm_slots(){  # prints "name|id|mode" lines for populated DIMM slots, possibly nothing
   local cache="${BMCCACHE:-/run/sckoc-bmc}" dcache="${BMCDIMMS:-/run/sckoc-bmc-dimm}"
@@ -1210,6 +1273,51 @@ bmc_dimm_slots(){  # prints "name|id|mode" lines for populated DIMM slots, possi
   [ "$(cat "$dcache" 2>/dev/null)" = none ] && return 0
   cat "$dcache" 2>/dev/null
   return 0
+}
+# hottest populated DIMM from the BMC, for the mon summary (parallels the CPU
+# Temp Max). Reads each populated slot once; prints "NN°C" or nothing.
+bmc_dimm_max(){
+  local sl rest t max=""
+  while IFS='|' read -r sl rest; do
+    [ -n "$sl" ] || continue
+    t=$(bmc_read_sensor "$sl" "${rest%%|*}" "${rest##*|}")
+    case "$t" in ''|*[!0-9]*) continue ;; esac
+    { [ -z "$max" ] || [ "$t" -gt "$max" ]; } && max=$t
+  done <<EOFSL
+$(bmc_dimm_slots)
+EOFSL
+  [ -n "$max" ] && printf "%d°C" "$max"
+}
+# Measured DRAM VDDQ rail from the BMC. Unlike the SMBIOS "Configured
+# Voltage" (a JEDEC nominal, e.g. 1.1 V, that stays put even on an
+# overclocked/overvolted rail), this is the real reading. Scans the voltage
+# SDRs once for a VDDQ sensor and reads it - preferring the value already
+# carried in the SDR row, falling back to an exact "sdr get" by name. Prints
+# e.g. "1.39" (volts) or nothing. One-shot, cached in /run for the run so the
+# static 'sckoc info' does not rescan. Soft dependency on ipmitool.
+bmc_vddq(){
+  local cache="${BMCVDDQ:-/run/sckoc-bmc-vddq}" v tbl row name
+  bmc_prep || return 0
+  if [ -s "$cache" ]; then
+    v=$(cat "$cache" 2>/dev/null); [ "$v" = none ] && return 0
+    printf '%s' "$v"; return 0
+  fi
+  tbl=$(timeout "${BMCPROBET:-20}" "$BMCIPT" sdr type Voltage 2>/dev/null)
+  row=$(printf '%s\n' "$tbl" | grep -i vddq | head -1)
+  if [ -n "$row" ]; then
+    # reading carried inline in the SDR row: "... | 1.39 Volts | ok"
+    v=$(printf '%s\n' "$row" | grep -oiE '[0-9]+(\.[0-9]+)? +Volts' | head -1 \
+        | grep -oE '[0-9]+(\.[0-9]+)?' | head -1)
+    if [ -z "$v" ]; then
+      # no inline reading -> exact fetch by sensor name (SDR column 1)
+      name=$(printf '%s\n' "$row" | cut -d'|' -f1 | sed 's/[[:space:]]*$//')
+      v=$(timeout "${BMCPROBET:-20}" "$BMCIPT" sdr get "$name" 2>/dev/null \
+          | awk -F': *' '/Sensor Reading/{ n=$2+0; if(n>0) printf "%.2f", n; exit }')
+    fi
+  fi
+  case "$v" in ''|0|0.00|*[!0-9.]*) echo none > "$cache" 2>/dev/null || true; return 0 ;; esac
+  echo "$v" > "$cache" 2>/dev/null || true
+  printf '%s' "$v"
 }
 amd_temp(){
   local h i=0 f t mx=""
@@ -1287,7 +1395,8 @@ amd_sock(){
   if bw=$(hsmp_q 0x14 1 "$1"); then bw="  BW $(( (bw>>8)&4095 ))/$(( (bw>>20)&4095 )) GB/s ($(( bw&255 ))%)"; else bw=""; fi
   if c0=$(hsmp_q 0x11 1 "$1"); then c0="  C0 ${c0}%"; else c0=""; fi
   printf "      %s%s%s\n" "$(amd_fclk "$1")" "$fm" "$cl"
-  printf "      DRAM %s%s\n" "$DRAMSPD" "$bw"
+  local mmx; mmx=$(bmc_dimm_max); [ -n "$mmx" ] && mmx="  Mem Max $mmx"
+  printf "      DRAM %s%s%s\n" "$DRAMSPD" "$bw" "$mmx"
   # a counter that does not advance between the two samples (dead counter,
   # or an unreadable MSR snapped as 0) would render a misleading "Pkg 0.0 W":
   # no running package sits at zero. Prefer HSMP ReadSocketPower, else N/A.
@@ -1378,7 +1487,7 @@ percore(){
       c6p=$(( dc6 * 100 / dt )); [ "$c6p" -gt 100 ] && c6p=100
       local tc; tc=$(( TJ[$pkg] - $(bits "$(sv "$c" 0x19c T1)" 16 7) ))
       [ "$tc" -ge $(( TJ[$pkg] - 10 )) ] && { hot=" !"; HOTANY=1; }
-      extra="  $(printf '%3d' "$tc")°C  $(wt4 "$(bits "$(sv "$c" 0x198 T1)" 32 16)/8192") V  C0 $(printf '%3d' "$c0m")%  C6 $(printf '%3d' "$c6p")%$hot"
+      extra="  $(printf '%3d' "$tc")°C  $(wt4 "$(bits "$(sv "$c" 0x198 T1)" 32 16)/8192") V  C0 $(printf '%3d' "$c0m")%  C6 $(printf '%3d' "$c6p")%  $(printf '%6s' "$(irq_delta "$sib")")$hot"
     else
       base=$(( $(amd_p0 "$c") / 100 ))
       local e2 e1a dE; e2=$(( $(sv "$c" 0xc001029a T1) & 4294967295 )); e1a=$(( $(sv "$c" 0xc001029a T0) & 4294967295 ))
@@ -1395,7 +1504,7 @@ percore(){
       if [ -n "$tp" ]; then td="$(printf '%3d' "$tp")°C"
       elif [ -n "${TCTL[$pk2]:-${TCTL[0]}}" ]; then td="$(printf '%3d' "${TCTL[$pk2]:-${TCTL[0]}}")*C"
       else td=" N/A "; fi
-      extra="  $(printf '%6s' "$(wt "($dE) * ($base) * 100000000 / (2^$eu * ($dt))")") W  $cd $td  C0 $(printf '%3d' "$c0m")%"
+      extra="  $(printf '%6s' "$(wt "($dE) * ($base) * 100000000 / (2^$eu * ($dt))")") W  $cd $td  C0 $(printf '%3d' "$c0m")%  $(printf '%6s' "$(irq_delta "$sib")")"
     fi
     printf "  core%-3d %5d MHz%s\n" "$c" $(( base * 100 * bm / 1000 )) "$extra"
   done
@@ -1413,15 +1522,19 @@ mon_sample(){
   if [ "$VEN" = GenuineIntel ]; then
     snap_load "$CPUL" 0xe7,0xe8,0x10,0x3fd,0x19c,0x198 T0
     snap_load "$REPL" 0x60d,0x3f9,0x611,0x619 T0
+    irq_snap T0
     sleep "$INT"
     snap_load "$CPUL" 0xe7,0xe8,0x10,0x3fd,0x19c,0x198 T1
     snap_load "$REPL" 0x60d,0x3f9,0x611,0x619 T1
+    irq_snap T1
   else
     snap_load "$CPUL" 0xe7,0xe8,0x10,0xc001029a T0
     snap_load "$REPL" 0xc001029b T0
+    irq_snap T0
     sleep "$INT"
     snap_load "$CPUL" 0xe7,0xe8,0x10,0xc001029a T1
     snap_load "$REPL" 0xc001029b T1
+    irq_snap T1
   fi
 }
 mon(){
@@ -1439,7 +1552,7 @@ mon(){
   cpu_model_block
   echo "== Per-core Overview =="
   if [ "$VEN" = GenuineIntel ]; then
-    echo "  Core      Freq      Temp   VID          C0      C6"
+    echo "  Core      Freq      Temp   VID          C0      C6      IRQ"
   else
     local hasccd=0 hf
     for hf in "${HWROOT:-/sys/class/hwmon}"/hwmon*/temp[0-9]*_label; do
@@ -1448,9 +1561,9 @@ mon(){
     done
     [ "$hasccd" = 0 ] && smu_ok && hasccd=1
     if [ "$hasccd" = 1 ]; then
-      echo "  Core      Freq       Power     CCD-Temp     C0"
+      echo "  Core      Freq       Power     CCD-Temp     C0      IRQ"
     else
-      echo "  Core      Freq       Power     CCD-Temp     C0   (*C = socket Tctl; per-CCD needs newer k10temp, or ryzen_smu)"
+      echo "  Core      Freq       Power     CCD-Temp     C0      IRQ   (*C = socket Tctl; per-CCD needs newer k10temp, or ryzen_smu)"
     fi
   fi
   percore

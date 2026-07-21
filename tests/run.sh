@@ -8,6 +8,10 @@ set -u
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 T=$(mktemp -d); trap 'rm -rf "$T"' EXIT
+# Keep every BMC probe inside $T. Without this, running the suite on a host
+# that happens to have ipmitool installed (but no BMC) leaves probe caches
+# under /run. Individual checks override these with their own paths.
+export BMCCACHE="$T/g-bmcc" BMCDIMMS="$T/g-bmcd" BMCVDDQ="$T/g-bmcv" IPMITOOL=/nonexistent
 PASS=0; FAIL=0
 ok(){ PASS=$((PASS+1)); echo "  ok  - $1"; }
 bad(){ FAIL=$((FAIL+1)); echo "  FAIL- $1"; }
@@ -237,6 +241,48 @@ OUT
 DMI
 chmod +x "$T/dmivalid"
 
+# bare-channel SMBIOS locators (CPU0_DIMM_B, no trailing digit - W890E SAGE SE
+# style) + a BMC whose DRAM rail sensors are named VCCD, not VDDQ
+cat > "$T/dmichan" <<'DMI'
+#!/bin/sh
+cat <<'OUT'
+Memory Device
+	Size: 32 GB
+	Locator: CPU0_DIMM_B
+	Configured Memory Speed: 6400 MT/s
+
+Memory Device
+	Size: 32 GB
+	Locator: CPU0_DIMM_D
+	Configured Memory Speed: 6400 MT/s
+
+OUT
+DMI
+chmod +x "$T/dmichan"
+
+cat > "$T/fakeipmi2" <<'FI2'
+#!/bin/bash
+if [ "$1 $2 $3" = "sdr type Temperature" ]; then
+cat <<'TBL'
+DIMMA1_Temp      | 04h |  ns  |  8.0 | No Reading
+DIMMB1_Temp      | 05h |  ok  |  8.0 | 30 degrees C
+DIMMC1_Temp      | 06h |  ns  |  8.0 | No Reading
+DIMMD1_Temp      | 07h |  ok  |  8.0 | 29 degrees C
+TBL
+elif [ "$1 $2 $3" = "sdr type Voltage" ]; then
+cat <<'VTBL'
+Vcore 1.8V IN    | 1Eh |  ok  |  7.0 | 2.16 Volts
+VCCD HV0 1.14V   | 20h |  ok  |  7.0 | 1.40 Volts
+VCCD HV1 1.14V   | 21h |  ok  |  7.0 | 1.39 Volts
+VTBL
+elif [ "$1 $2" = "raw 0x04" ]; then
+  case "$4" in 0x05) echo " 1e 40 40" ;; 0x07) echo " 1d 40 40" ;; esac
+elif [ "$1 $2" = "sdr get" ]; then
+  case "$3" in *B1*) echo " Sensor Reading        : 30 (+/- 0) degrees C" ;; *D1*) echo " Sensor Reading        : 29 (+/- 0) degrees C" ;; esac
+fi
+FI2
+chmod +x "$T/fakeipmi2"
+
 bash sckoc help > "$T/help.out"
 chk "help lists vid"               "grep -q 'sckoc vid ' '$T/help.out'"
 chk "help lists info"              "grep -q 'sckoc info ' '$T/help.out'"
@@ -319,7 +365,7 @@ PYA
   chk "AMD json: dead pkg counter -> null" "env $A10 bash sckoc --json 2>/dev/null | grep -q '\"pkg_w\":null'"
   chk "AMD mon: P-state fallback labelled VID" "grep -qE 'VID (~|N/A)' '$T/mona.out' && ! grep -q 'Vcore ~' '$T/mona.out'"
   rm -f /run/sckoc-bmc /run/sckoc-bmc-dimm 2>/dev/null || true
-  IPB="MSRVEN=AuthenticAMD MSRFAM=26 INT=1 READOC=$T/readoc READOC_DEV=$T/amd%d.msr DMI=/bin/false UNCSYS=$T/none TPMIU=/nonexistent SMUDRV=$T/none HWROOT=$T/nohw IPMITOOL=$T/fakeipmi BMCCACHE=$T/bmcc BMCDIMMS=$T/bmcdimm"
+  IPB="MSRVEN=AuthenticAMD MSRFAM=26 INT=1 READOC=$T/readoc READOC_DEV=$T/amd%d.msr DMI=/bin/false UNCSYS=$T/none TPMIU=/nonexistent SMUDRV=$T/none HWROOT=$T/nohw IPMITOOL=$T/fakeipmi BMCCACHE=$T/bmcc BMCDIMMS=$T/bmcdimm BMCVDDQ=$T/ipbv"
   env $IPB bash sckoc > "$T/monb1.out" 2>/dev/null || true
   chk "AMD mon: BMC temp fallback (probe)" "grep -q 'Temp Max 31' '$T/monb1.out'"
   chk "AMD mon: BMC probe caches sensor id + raw mode" "[ \"\$(cat '$T/bmcc')\" = 'CPU Package Temp|01|raw' ]"
@@ -327,16 +373,19 @@ PYA
   env $CHGB bash sckoc > "$T/monc1.out" 2>/dev/null || true   # probe + first read = 31
   env $CHGB bash sckoc > "$T/monb2.out" 2>/dev/null || true   # cached read = 33
   chk "AMD mon: BMC cached raw single-message read" "grep -q 'Temp Max 31' '$T/monc1.out' && grep -q 'Temp Max 33' '$T/monb2.out'"
-  env $IPB IPMITOOL=$T/slowipmi BMCCACHE=$T/bmslow BMCDIMMS=$T/bmslowd BMCPROBET=1 bash sckoc >/dev/null 2>&1 || true
+  env $IPB IPMITOOL=$T/slowipmi BMCCACHE=$T/bmslow BMCDIMMS=$T/bmslowd BMCVDDQ=$T/bmslowv BMCPROBET=1 bash sckoc >/dev/null 2>&1 || true
   chk "AMD mon: slow-BMC timeout is not negative-cached" "[ ! -e '$T/bmslow' ]"
   chk "info: duplicate DIMM locators numbered" "env MSRVEN=AuthenticAMD MSRFAM=26 READOC=$T/readoc READOC_DEV=$T/amd%d.msr SBDIR=$T/sb2 LDF=$T/ld2 DMI=$T/dmidup IPMITOOL=/nonexistent BMCDIMMS=$T/nodimm bash sckoc info | grep -q 'DIMM 0 #2'"
-SLOTE="MSRVEN=AuthenticAMD MSRFAM=26 READOC=$T/readoc READOC_DEV=$T/amd%d.msr SBDIR=$T/sb2 LDF=$T/ld2 DMI=$T/dmidup IPMITOOL=$T/fakeipmi BMCCACHE=$T/slotc BMCDIMMS=$T/slotd"
+SLOTE="MSRVEN=AuthenticAMD MSRFAM=26 READOC=$T/readoc READOC_DEV=$T/amd%d.msr SBDIR=$T/sb2 LDF=$T/ld2 DMI=$T/dmidup IPMITOOL=$T/fakeipmi BMCCACHE=$T/slotc BMCDIMMS=$T/slotd BMCVDDQ=$T/slotv"
 chk "info: BMC slot names replace blank locators" "env $SLOTE bash sckoc info | grep -q 'DIMMC1' && env $SLOTE bash sckoc info | grep -q 'DIMMF1'"
 chk "info: BMC DIMM rows show live temperature" "env $SLOTE bash sckoc info | grep -Eq 'DIMMC1 .*32 GB +30' && env $SLOTE bash sckoc info | grep -Eq 'DIMMF1 .*32 GB +29'"
 VALE="MSRVEN=AuthenticAMD MSRFAM=26 READOC=$T/readoc READOC_DEV=$T/amd%d.msr SBDIR=$T/sb2 LDF=$T/ld2 DMI=$T/dmivalid IPMITOOL=$T/fakeipmi BMCCACHE=$T/valc BMCDIMMS=$T/vald BMCVDDQ=$T/valv"
 chk "info: valid locators keep name, append BMC temp by slot key" "env $VALE bash sckoc info | grep -Eq 'CPU0_DIMM_C1 .*32 GB +30°C' && env $VALE bash sckoc info | grep -Eq 'CPU0_DIMM_F1 .*32 GB +29°C'"
 chk "info: valid locators are not renamed to BMC sensor names" "env $VALE bash sckoc info | grep -q 'CPU0_DIMM_C1' && ! env $VALE bash sckoc info | grep -q 'DIMMC1'"
 chk "info: measured VDDQ shown after each DIMM frequency" "env $VALE bash sckoc info | grep -Eq 'CPU0_DIMM_C1 .*MT/s.*1.39 V'"
+CHANE="MSRVEN=AuthenticAMD MSRFAM=26 READOC=$T/readoc READOC_DEV=$T/amd%d.msr SBDIR=$T/sb2 LDF=$T/ld2 DMI=$T/dmichan IPMITOOL=$T/fakeipmi2 BMCCACHE=$T/chc BMCDIMMS=$T/chd BMCVDDQ=$T/chv"
+chk "info: bare-channel locator matched to BMC temp" "env $CHANE bash sckoc info | grep -Eq 'CPU0_DIMM_B .*32 GB +30°C' && env $CHANE bash sckoc info | grep -Eq 'CPU0_DIMM_D .*32 GB +29°C'"
+chk "info: VCCD rails shown as VDDQ when no VDDQ sensor" "env $CHANE bash sckoc info | grep -q '1.40/1.39 V'"
 chk "info: SMBIOS nominal voltage dropped from DIMM rows" "! env $VALE bash sckoc info | grep -E 'CPU0_DIMM_C1|CPU0_DIMM_F1' | grep -q ' 1.1'"
 chk "bmc_dimm_max picks the hottest populated DIMM" "bash -c 'eval \"\$(sed -n \"/^bmc_prep()/,/^}/p;/^bmc_read_sensor()/,/^}/p;/^bmc_probe()/,/^}/p;/^bmc_dimm_slots()/,/^}/p;/^bmc_dimm_max()/,/^}/p\" sckoc)\"; declare -A IRQ; export IPMITOOL=$T/fakeipmi BMCCACHE=$T/mmc BMCDIMMS=$T/mmd; case \"\$(bmc_dimm_max)\" in 30*) exit 0;; *) exit 1;; esac'"
 chk "mon: DIMM Mem Max on the DRAM line with BMC" "env $IPB DMI=$T/dmivalid bash sckoc 2>/dev/null | grep -q 'Mem Max 30°C'"

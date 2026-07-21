@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: GPL-2.0-only
 Name:           sckoc
-Version:        3.2.0
+Version:        4.0.0
 Release:        %autorelease
 Summary:        Read-only hardware monitor for Intel and AMD servers
 
@@ -76,6 +76,18 @@ if [ $1 -eq 0 ]; then rm -f /run/sckoc-*; fi
 %{_mandir}/man1/sckoc.1*
 
 %changelog
+* Tue Jul 21 2026 SkyWalkerAMD <scka7t@gmail.com> - 4.0.0-1
+- info: DIMM temperatures now match bare-channel SMBIOS locators
+  (CPU0_DIMM_B <-> the BMC's DIMMB1 sensor, W890E SAGE SE style)
+- info: the DRAM rail is also recognised under the VCCD sensor naming
+  (Intel DDR5 memory VDD); one reading per memory-controller rail,
+  joined with a slash, VDDQ column width follows the value
+- tpmi-uncore: the PFS directory scan is now bounded against the BAR size
+  (a bogus table offset degrades to no data instead of a crash)
+- hsmp-msg: argument count clamped to the 8-word message limit
+- tests: BMC probes are confined to the suite's tempdir; running the suite
+  on a host with ipmitool installed no longer leaves caches under /run
+
 * Tue Jul 21 2026 SkyWalkerAMD <scka7t@gmail.com> - 3.2.0-1
 - readoc: reject register numbers above 32 bits and malformed -f bitfields;
   a READOC_DEV pattern other than a fixed path or a single %%d now falls
@@ -85,6 +97,7 @@ if [ $1 -eq 0 ]; then rm -f /run/sckoc-*; fi
   upload and the apt repository publish only after tests pass (the apt repo
   previously published even when tests failed); release runs are
   single-flight; missing release assets now fail the upload
+
 
 * Tue Jul 21 2026 SkyWalkerAMD <scka7t@gmail.com> - 3.1.0-1
 - info: per-DIMM memory reworked as a column table (Speed / JEDEC / VDDQ /

@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: GPL-2.0-only
 Name:           sckoc
 Version:        4.0.0
-Release:        %autorelease
+Release:        1%{?dist}
 Summary:        Read-only hardware monitor for Intel and AMD servers
 
 # All code is original to this project (monitor script, readoc, hsmp-msg)
@@ -239,4 +239,3 @@ if [ $1 -eq 0 ]; then rm -f /run/sckoc-*; fi
   intel-uncore-frequency sysfs driver is present
 - add tests/ regression suite and run it in CI
 
-%autochangelog

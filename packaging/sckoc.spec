@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: GPL-2.0-only
 Name:           sckoc
-Version:        4.0.0
+Version:        4.0.1
 Release:        1%{?dist}
 Summary:        Read-only hardware monitor for Intel/AMD servers
 License:        GPL-2.0-only
@@ -76,6 +76,13 @@ if [ "$1" = 0 ]; then rm -f /etc/modules-load.d/sckoc-amd.conf /run/sckoc-*; fi
 %ghost %{_sysconfdir}/modules-load.d/sckoc-amd.conf
 
 %changelog
+* Wed Jul 22 2026 SkyWalkerAMD <scka7t@gmail.com> - 4.0.1-1
+- packaging: drop the stray autochangelog macro in the Fedora spec that clashed
+  with the hand-written changelog (rpmbuild flagged the changelog as out of
+  order on rawhide); both specs now use one hand-written changelog with a
+  plain Release
+- docs: add SPDX-License-Identifier headers to the README files
+
 * Tue Jul 21 2026 SkyWalkerAMD <scka7t@gmail.com> - 4.0.0-1
 - info: DIMM temperatures now match bare-channel SMBIOS locators
   (CPU0_DIMM_B <-> the BMC's DIMMB1 sensor, W890E SAGE SE style)

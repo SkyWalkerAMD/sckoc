@@ -29,7 +29,7 @@ command -v ipmitool >/dev/null || {
 T=$(mktemp -d); trap 'rm -rf "$T"' EXIT
 cat > "$T/version.h" <<'VER_H'
 /* SPDX-License-Identifier: GPL-2.0-only */
-#define VERSION_STRING "4.0.0"
+#define VERSION_STRING "4.0.1"
 VER_H
 cat > "$T/readoc.c" <<'READOC_C'
 // SPDX-License-Identifier: GPL-2.0-only
@@ -501,7 +501,7 @@ cat > /usr/local/bin/sckoc <<'MSR_SH'
 #!/bin/bash
 # SPDX-License-Identifier: GPL-2.0-only
 # sckoc: Intel/AMD read-only hardware monitor (no writes)
-MSRVER=4.0.0
+MSRVER=4.0.1
 # No 'set -e': this is a read-only monitor built from many best-effort MSR
 # reads, and blocks use the `[ cond ] && action` idiom throughout (which
 # returns non-zero when the guard is false). Each block degrades on its own;
